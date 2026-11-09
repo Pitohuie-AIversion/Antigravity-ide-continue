@@ -110,7 +110,7 @@ class AutoPilotDaemon:
         except Exception as e:
             self.add_log(f"保存 config.json 失败: {e}", "ERROR")
 
-    def scan_conversations(self, limit: int = 20) -> List[Dict[str, Any]]:
+    def scan_conversations(self, limit: int = 50) -> List[Dict[str, Any]]:
         if not os.path.exists(BRAIN_DIR):
             return []
 
@@ -119,21 +119,25 @@ class AutoPilotDaemon:
             p = os.path.join(BRAIN_DIR, entry, ".system_generated", "logs", "transcript.jsonl")
             if os.path.exists(p):
                 mtime = os.path.getmtime(p)
-                preview = self._extract_preview(p)
                 step_count = self._count_steps(p)
+                is_empty = (step_count == 0)
+                preview = self._extract_preview(p, is_empty)
                 convs.append({
                     "id": entry,
                     "mtime": mtime,
                     "mtime_str": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(mtime)),
                     "preview": preview,
                     "step_count": step_count,
+                    "is_empty": is_empty,
                     "is_current": (entry == self.target_conv_id)
                 })
 
         convs.sort(key=lambda x: x["mtime"], reverse=True)
         return convs[:limit]
 
-    def _extract_preview(self, transcript_file: str) -> str:
+    def _extract_preview(self, transcript_file: str, is_empty: bool = False) -> str:
+        if is_empty:
+            return "🌱 (新建空白会话 · 尚未发消息)"
         try:
             with open(transcript_file, "r", encoding="utf-8", errors="ignore") as f:
                 for line in f:
@@ -150,7 +154,7 @@ class AutoPilotDaemon:
                         return (content[:70] + "...") if len(content) > 70 else content
         except Exception:
             pass
-        return "(新对话 / 无预览文本)"
+        return "🌱 (新建空白会话 · 尚未发消息)"
 
     def _count_steps(self, transcript_file: str) -> int:
         try:

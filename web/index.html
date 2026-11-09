@@ -139,7 +139,12 @@
           <div class="conv-preview-snippet" id="convPreviewSnippet">
             会话预览：(请从上方选择或跟踪最新会话)
           </div>
-          <div class="checkbox-row">
+          <div class="checkbox-row" style="display:flex; flex-direction:column; gap:8px;">
+            <label class="custom-checkbox" title="自动过滤掉在IDE中点击加号新建但未发过任何消息的空会话">
+              <input type="checkbox" id="hideEmptyCheckbox" checked>
+              <span class="checkmark"></span>
+              <span>隐藏未发消息的空白会话（仅显示有发言内容的会话）</span>
+            </label>
             <label class="custom-checkbox">
               <input type="checkbox" id="lockConvCheckbox" checked>
               <span class="checkmark"></span>

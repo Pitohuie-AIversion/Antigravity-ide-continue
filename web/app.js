@@ -43,6 +43,7 @@ const convSelect = document.getElementById('convSelect');
 const convPreviewSnippet = document.getElementById('convPreviewSnippet');
 const convCountHint = document.getElementById('convCountHint');
 const refreshConvsBtn = document.getElementById('refreshConvsBtn');
+const hideEmptyCheckbox = document.getElementById('hideEmptyCheckbox');
 const lockConvCheckbox = document.getElementById('lockConvCheckbox');
 
 const promptInput = document.getElementById('promptInput');
@@ -224,18 +225,37 @@ function renderConversationsDropdown() {
     return;
   }
 
-  convCountHint.innerText = `已扫描 ${conversationsList.length} 个活跃对话`;
+  const hideEmpty = hideEmptyCheckbox ? hideEmptyCheckbox.checked : true;
+  const filtered = hideEmpty
+    ? conversationsList.filter(c => !c.is_empty && c.step_count > 0)
+    : conversationsList;
 
-  conversationsList.forEach((c, idx) => {
+  const displayList = filtered.length > 0 ? filtered : conversationsList;
+  const emptyCount = conversationsList.filter(c => c.is_empty || c.step_count === 0).length;
+
+  convCountHint.innerText = hideEmpty 
+    ? `已显示 ${displayList.length} 个有记录会话 (已过滤 ${emptyCount} 个空白会话)` 
+    : `已扫描全部 ${conversationsList.length} 个会话 (含 ${emptyCount} 个空白会话)`;
+
+  displayList.forEach((c) => {
     const opt = document.createElement('option');
     opt.value = c.id;
-    const titleSnippet = c.preview && c.preview !== '(无预览内容)' ? c.preview : c.id.slice(0, 14);
-    opt.innerText = `[${c.mtime_str.slice(5)}] ${titleSnippet} (${c.id.slice(0, 8)}...)`;
+    let titleSnippet = c.preview && c.preview !== '(无预览内容)' ? c.preview : c.id.slice(0, 14);
+    if (c.is_empty || c.step_count === 0) {
+      opt.innerText = `[${c.mtime_str.slice(5)}] 🌱 [新建空白会话 · 未发消息] (${c.id.slice(0, 8)}...)`;
+    } else {
+      opt.innerText = `[${c.mtime_str.slice(5)}] ${titleSnippet} (${c.id.slice(0, 8)}...)`;
+    }
     if (c.id === currentVal) {
       opt.selected = true;
     }
     convSelect.appendChild(opt);
   });
+
+  // 如果原本选中的会话不在当前过滤列表中，则默认选中第一个
+  if (!convSelect.value && convSelect.options.length > 0) {
+    convSelect.selectedIndex = 0;
+  }
 
   updateSelectedConvPreview();
 }
@@ -382,6 +402,13 @@ refreshConvsBtn.addEventListener('click', async () => {
   refreshConvsBtn.innerText = '🔄 刷新会话列表';
   showToast('会话列表已刷新', '🔄');
 });
+
+if (hideEmptyCheckbox) {
+  hideEmptyCheckbox.addEventListener('change', () => {
+    renderConversationsDropdown();
+    showToast(hideEmptyCheckbox.checked ? '已隐藏未发言空白会话' : '已显示所有会话', '👁️');
+  });
+}
 
 // 复制会话 ID
 copyConvBtn.addEventListener('click', () => {
