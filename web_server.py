@@ -637,6 +637,20 @@ class AutoPilotHTTPHandler(SimpleHTTPRequestHandler):
                 daemon.logs.clear()
             self.send_json({"ok": True, "message": "日志已清空"})
 
+        elif path == "/api/restart":
+            self.send_json({"ok": True, "message": "服务正在重启中..."})
+            def restart_worker():
+                time.sleep(0.5)
+                daemon.stop()
+                python_exe = sys.executable
+                script_path = os.path.abspath(__file__)
+                if os.name == 'nt':
+                    subprocess.Popen([python_exe, "-u", script_path], creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS)
+                else:
+                    subprocess.Popen([python_exe, "-u", script_path])
+                os._exit(0)
+            threading.Thread(target=restart_worker, daemon=True).start()
+
         else:
             self.send_json({"error": "Unknown endpoint"}, 404)
 

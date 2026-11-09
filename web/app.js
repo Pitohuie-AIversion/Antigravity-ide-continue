@@ -48,6 +48,7 @@ const lockConvCheckbox = document.getElementById('lockConvCheckbox');
 const currentNodeBadge = document.getElementById('currentNodeBadge');
 const nodeBtnLocal = document.getElementById('nodeBtnLocal');
 const nodeBtnWestc = document.getElementById('nodeBtnWestc');
+const headerRestartBtn = document.getElementById('headerRestartBtn');
 
 const promptInput = document.getElementById('promptInput');
 const cooldownInput = document.getElementById('cooldownInput');
@@ -479,6 +480,19 @@ if (nodeBtnWestc) {
     } catch (e) {
       showToast('连接远程节点失败', '✖');
     }
+  });
+}
+
+if (headerRestartBtn) {
+  headerRestartBtn.addEventListener('click', async () => {
+    if (!confirm('确定要重启 Antigravity Auto-Pilot 后端控制服务吗？')) return;
+    showToast('正在重启后端守护服务...', '🔄');
+    try {
+      await fetch('/api/restart', { method: 'POST' });
+    } catch (e) {}
+    setTimeout(() => {
+      window.location.reload();
+    }, 1800);
   });
 }
 

@@ -7,6 +7,12 @@ echo ============================================================
 echo.
 cd /d "%~dp0"
 
+echo [*] 检查 5300 端口占用...
+for /f "tokens=5" %%a in ('netstat -aon ^| findstr :5300 ^| findstr LISTENING') do (
+    echo [*] 正在终止旧服务实例 (PID: %%a)...
+    taskkill /F /PID %%a >nul 2>&1
+)
+
 echo [*] 正在打开控制台界面: http://localhost:5300
 timeout /t 1 >nul
 start "" "http://localhost:5300"
