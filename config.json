@@ -1,6 +1,6 @@
 {
-  "target_conversation_id": "b3636e97-3c55-494b-82c5-6b9b1accf5fe",
-  "idle_delay_seconds": 3,
+  "target_conversation_id": "d8b02da2-566d-47f4-9134-ba862677c798",
+  "idle_delay_seconds": 3.0,
   "max_turns": 9999,
   "continue_prompt": "继续",
   "completion_keywords": [
@@ -10,5 +10,6 @@
   ],
   "pause_on_question": false,
   "sound_alert": true,
-  "auto_select_latest": false
+  "auto_select_latest": false,
+  "node_type": "ssh:seetacloud-westc"
 }

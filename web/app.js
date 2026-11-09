@@ -157,6 +157,8 @@ function updateUIWithStatus(status) {
       mainStatusText.innerText = '正在发送指令...';
     } else if (status.state === 'COMPLETED') {
       mainStatusText.innerText = '已达成完工退出';
+    } else if (status.state === 'BUSY') {
+      mainStatusText.innerText = `执行中 (Step ${status.current_step})`;
     } else {
       mainStatusText.innerText = '巡航监听中 RUNNING';
     }
@@ -340,23 +342,34 @@ startBtn.addEventListener('click', async () => {
   const prompt = promptInput.value.trim() || '继续';
   const cooldown = parseFloat(cooldownInput.value) || 3.0;
   const max_turns = parseInt(maxTurnsInput.value) || 9999;
-  const is_locked = lockConvCheckbox.checked;
+  const is_locked = lockConvCheckbox ? lockConvCheckbox.checked : true;
 
   try {
     startBtn.disabled = true;
+    const btnTitle = startBtn.querySelector('.btn-title');
+    if (btnTitle) btnTitle.innerText = '正在启动巡航...';
+    showToast('正在启动自驱巡航...', '🚀');
+
     const res = await fetch('/api/start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ conv_id, prompt, cooldown, max_turns, is_locked })
     });
     const data = await res.json();
-    showToast('自驱巡航已启动', '🚀');
-    playChime(523.2);
-    fetchStatus();
+    if (data.ok) {
+      showToast('自驱巡航已启动！', '🚀');
+      playChime(523.2);
+      fetchStatus();
+      fetchLogs();
+    } else {
+      showToast('启动失败: ' + (data.message || '未知错误'), '⚠️');
+    }
   } catch (e) {
-    showToast('启动请求失败', '✖');
+    showToast('启动请求异常: ' + e.message, '✖');
   } finally {
     startBtn.disabled = false;
+    const btnTitle = startBtn.querySelector('.btn-title');
+    if (btnTitle) btnTitle.innerText = '启动自驱巡航';
   }
 });
 
@@ -380,6 +393,10 @@ triggerOnceBtn.addEventListener('click', async () => {
 
   try {
     triggerOnceBtn.disabled = true;
+    const btnTitle = triggerOnceBtn.querySelector('.btn-title');
+    if (btnTitle) btnTitle.innerText = '正在注入...';
+    showToast(`正在注入指令: "${text}"`, '⚡');
+
     const res = await fetch('/api/trigger_once', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -398,6 +415,8 @@ triggerOnceBtn.addEventListener('click', async () => {
     showToast('注入请求异常', '✖');
   } finally {
     triggerOnceBtn.disabled = false;
+    const btnTitle = triggerOnceBtn.querySelector('.btn-title');
+    if (btnTitle) btnTitle.innerText = '立即发送一次';
   }
 });
 
