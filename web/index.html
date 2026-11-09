@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>⚡ Antigravity Auto-Pilot 控制中心 ｜ 端内自动化持续开发仪表盘</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;800&family=Outfit:wght@400;500;600;700;800;900&family=Noto+Sans+SC:wght@400;500;700;900&display=swap" rel="stylesheet">
+</head>
+<body>
+  <div class="ambient-glow glow-1"></div>
+  <div class="ambient-glow glow-2"></div>
+  <div class="ambient-dots"></div>
+
+  <div class="app-container">
+    <!-- 顶部导航栏 -->
+    <header class="app-header">
+      <div class="brand-wrap">
+        <div class="brand-logo">
+          <span class="logo-icon">⚡</span>
+          <div class="logo-pulse"></div>
+        </div>
+        <div class="brand-text">
+          <div class="brand-title">ANTIGRAVITY <span>AUTO-PILOT</span></div>
+          <div class="brand-subtitle">IDE 端内自动化持续开发控制中心 · LSP 通道无感静默注入</div>
+        </div>
+      </div>
+
+      <div class="header-status-group">
+        <div class="lsp-badge" id="lspStatusBadge">
+          <span class="lsp-dot"></span>
+          <span id="lspStatusText">LSP API: 就绪</span>
+        </div>
+        <div class="status-pill stopped" id="mainStatusPill">
+          <span class="status-indicator"></span>
+          <span class="status-text" id="mainStatusText">已停止 STOPPED</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- 核心指标卡片矩阵 -->
+    <section class="metrics-grid">
+      <!-- 卡片1：运行状态 -->
+      <div class="metric-card">
+        <div class="metric-header">
+          <span class="metric-icon">🔄</span>
+          <span class="metric-label">当前运行状态</span>
+        </div>
+        <div class="metric-value status-val" id="metricState">STOPPED</div>
+        <div class="metric-foot" id="metricStateDetail">守护进程处于就绪待命状态</div>
+      </div>
+
+      <!-- 卡片2：累计注入轮数 -->
+      <div class="metric-card">
+        <div class="metric-header">
+          <span class="metric-icon">🚀</span>
+          <span class="metric-label">累计自动注入</span>
+        </div>
+        <div class="metric-value counter-val" id="metricSentCount">0 <span class="unit">轮</span></div>
+        <div class="metric-foot">零按键/零焦点抢占静默执行</div>
+      </div>
+
+      <!-- 卡片3：当前步骤 & 冷却 -->
+      <div class="metric-card">
+        <div class="metric-header">
+          <span class="metric-icon">⏱</span>
+          <span class="metric-label">消抖冷却倒计时</span>
+        </div>
+        <div class="metric-value cooldown-val" id="metricCooldown">0.0 <span class="unit">s</span></div>
+        <div class="cooldown-track">
+          <div class="cooldown-fill" id="cooldownBar" style="width: 0%;"></div>
+        </div>
+        <div class="metric-foot" id="metricStepDetail">当前步骤: Step --</div>
+      </div>
+
+      <!-- 卡片4：监控目标对话 -->
+      <div class="metric-card">
+        <div class="metric-header">
+          <span class="metric-icon">🎯</span>
+          <span class="metric-label">监控目标会话</span>
+        </div>
+        <div class="metric-value conv-val" id="metricConvId">--</div>
+        <div class="metric-foot copy-foot" id="copyConvBtn" title="点击复制完整会话ID">
+          <span>📋 点击复制会话 ID</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- 主操作区 (Hero Controls) -->
+    <section class="control-deck">
+      <div class="action-buttons-row">
+        <button class="btn-main btn-start" id="startBtn">
+          <span class="btn-icon">▶</span>
+          <div class="btn-content">
+            <span class="btn-title">启动自驱巡航</span>
+            <span class="btn-desc">自动检测对话完结并注入继续指令</span>
+          </div>
+        </button>
+
+        <button class="btn-main btn-stop" id="stopBtn" style="display: none;">
+          <span class="btn-icon">⏹</span>
+          <div class="btn-content">
+            <span class="btn-title">立即中止自驱</span>
+            <span class="btn-desc">停止当前后台监听与自动注入</span>
+          </div>
+        </button>
+
+        <button class="btn-secondary btn-trigger" id="triggerOnceBtn">
+          <span class="btn-icon">⚡</span>
+          <div class="btn-content">
+            <span class="btn-title">立即发送一次</span>
+            <span class="btn-desc">无须等待，向目标对话立即注入</span>
+          </div>
+        </button>
+      </div>
+    </section>
+
+    <!-- 参数配置与控制中心 -->
+    <section class="config-section">
+      <div class="section-title-row">
+        <h3>⚙️ 自动化参数配置 (Configuration & Routing)</h3>
+        <button class="btn-pill-action" id="refreshConvsBtn">🔄 刷新会话列表</button>
+      </div>
+
+      <div class="config-grid">
+        <!-- 目标会话选择 -->
+        <div class="config-col">
+          <label class="config-label">
+            <span>🎯 目标会话 (Target Conversation)</span>
+            <span class="config-hint" id="convCountHint">已扫描 0 个活跃对话</span>
+          </label>
+          <div class="select-wrapper">
+            <select class="custom-select" id="convSelect">
+              <option value="">正在扫描 Antigravity 会话列表...</option>
+            </select>
+          </div>
+          <div class="conv-preview-snippet" id="convPreviewSnippet">
+            会话预览：(请从上方选择或跟踪最新会话)
+          </div>
+          <div class="checkbox-row">
+            <label class="custom-checkbox">
+              <input type="checkbox" id="lockConvCheckbox" checked>
+              <span class="checkmark"></span>
+              <span>锁定此目标会话（不随最新对话动态漂移）</span>
+            </label>
+          </div>
+        </div>
+
+        <!-- 注入指令与提示词设置 -->
+        <div class="config-col">
+          <label class="config-label">
+            <span>💬 自动注入指令 (Prompt Content)</span>
+            <span class="config-hint">每轮对话结束时注入的文字</span>
+          </label>
+          <input type="text" class="custom-input" id="promptInput" value="继续" placeholder="例如：继续、继续推进下一步">
+          
+          <!-- 快捷提示词药丸 -->
+          <div class="prompt-pills">
+            <button class="prompt-pill" data-val="继续">继续</button>
+            <button class="prompt-pill" data-val="继续推进下一项任务">继续推进下一项任务</button>
+            <button class="prompt-pill" data-val="自测代码并验证效果">自测代码并验证效果</button>
+            <button class="prompt-pill" data-val="生成完整交付总结报告">生成完整交付总结报告</button>
+          </div>
+
+          <!-- 冷却时间与轮数设置 -->
+          <div class="params-row">
+            <div class="param-item">
+              <label class="sub-label">冷却消抖延迟 (秒)</label>
+              <div class="number-input-wrap">
+                <input type="number" class="param-input" id="cooldownInput" value="3.0" min="1.0" max="15.0" step="0.5">
+                <span class="param-unit">秒</span>
+              </div>
+            </div>
+
+            <div class="param-item">
+              <label class="sub-label">最大轮数上限</label>
+              <div class="number-input-wrap">
+                <input type="number" class="param-input" id="maxTurnsInput" value="9999" min="1" max="99999">
+                <span class="param-unit">轮</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="checkbox-row" style="margin-top: 10px;">
+            <label class="custom-checkbox">
+              <input type="checkbox" id="soundAlertCheckbox" checked>
+              <span class="checkmark"></span>
+              <span>注入成功播放 Web Audio 空灵提示音</span>
+            </label>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 实时运行日志控制台 (Live Execution Console) -->
+    <section class="console-section">
+      <div class="console-header">
+        <div class="console-title">
+          <span class="terminal-dot red"></span>
+          <span class="terminal-dot yellow"></span>
+          <span class="terminal-dot green"></span>
+          <span class="console-name">📜 实时运行与状态审计控制台 (Live Stream Console)</span>
+        </div>
+
+        <div class="console-actions">
+          <label class="auto-scroll-toggle">
+            <input type="checkbox" id="autoScrollCheckbox" checked>
+            <span>自动滚屏</span>
+          </label>
+          <button class="console-btn" id="copyLogsBtn">📋 复制日志</button>
+          <button class="console-btn" id="clearLogsBtn">🗑️ 清空日志</button>
+        </div>
+      </div>
+
+      <div class="console-body" id="consoleBody">
+        <div class="log-line info">
+          <span class="log-ts">[00:00:00]</span>
+          <span class="log-tag tag-info">[SYSTEM]</span>
+          <span class="log-msg">Antigravity Auto-Pilot 控制中心已就绪，正在连接后端守护引擎...</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- 底部快捷工具与外部导航 -->
+    <footer class="app-footer">
+      <div class="footer-links">
+        <a href="http://localhost:5218/preview.html" target="_blank" class="footer-link">
+          <span>🌐</span> 打开微光账单 Web 预览 (5218)
+        </a>
+        <span class="footer-sep">·</span>
+        <button class="footer-link-btn" id="quickTestLspBtn">
+          <span>🔍</span> 检测 Language Server 接口响应
+        </button>
+        <span class="footer-sep">·</span>
+        <span class="footer-copy">© 2026 Antigravity IDE Automation Suite · Pair Programming</span>
+      </div>
+    </footer>
+  </div>
+
+  <!-- 轻量级浮动 Toast -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
