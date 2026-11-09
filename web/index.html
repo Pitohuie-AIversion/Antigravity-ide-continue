@@ -124,6 +124,35 @@
         <button class="btn-pill-action" id="refreshConvsBtn">🔄 刷新会话列表</button>
       </div>
 
+      <!-- 运行环境节点选择 (Local / SSH Remote) -->
+      <div class="node-selector-card">
+        <div class="node-selector-header">
+          <div class="node-selector-label">
+            <span class="node-icon-title">🌐</span>
+            <span class="node-text-title">控制执行节点 (Target Execution Node)</span>
+          </div>
+          <span class="node-badge" id="currentNodeBadge">🖥️ 本地环境 (Local)</span>
+        </div>
+        <div class="node-pills-row">
+          <button class="node-pill active" id="nodeBtnLocal" data-node="local">
+            <span class="pill-dot"></span>
+            <span class="pill-icon">🖥️</span>
+            <div class="pill-info">
+              <span class="pill-name">本地开发区 (Local Windows)</span>
+              <span class="pill-sub">~/.gemini/antigravity-ide/brain</span>
+            </div>
+          </button>
+          <button class="node-pill" id="nodeBtnWestc" data-node="ssh:seetacloud-westc">
+            <span class="pill-dot"></span>
+            <span class="pill-icon">☁️</span>
+            <div class="pill-info">
+              <span class="pill-name">恒源云西区 (seetacloud-westc)</span>
+              <span class="pill-sub">端口 17090 · 恒源云自动心跳保活</span>
+            </div>
+          </button>
+        </div>
+      </div>
+
       <div class="config-grid">
         <!-- 目标会话选择 -->
         <div class="config-col">

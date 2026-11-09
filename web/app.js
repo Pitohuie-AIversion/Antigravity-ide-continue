@@ -45,6 +45,9 @@ const convCountHint = document.getElementById('convCountHint');
 const refreshConvsBtn = document.getElementById('refreshConvsBtn');
 const hideEmptyCheckbox = document.getElementById('hideEmptyCheckbox');
 const lockConvCheckbox = document.getElementById('lockConvCheckbox');
+const currentNodeBadge = document.getElementById('currentNodeBadge');
+const nodeBtnLocal = document.getElementById('nodeBtnLocal');
+const nodeBtnWestc = document.getElementById('nodeBtnWestc');
 
 const promptInput = document.getElementById('promptInput');
 const cooldownInput = document.getElementById('cooldownInput');
@@ -169,6 +172,28 @@ function updateUIWithStatus(status) {
     lspStatusBadge.style.color = '#fca5a5';
     lspStatusBadge.style.borderColor = 'rgba(244, 63, 94, 0.4)';
     lspStatusText.innerText = 'LSP API: 未检测到';
+  }
+
+  // 节点高亮
+  if (status.node_type) {
+    if (status.node_type.startsWith('ssh:')) {
+      const hostName = status.node_type.split('ssh:')[1];
+      if (currentNodeBadge) {
+        currentNodeBadge.innerText = `☁️ 远程节点: ${hostName}`;
+        currentNodeBadge.style.color = '#38bdf8';
+        currentNodeBadge.style.borderColor = '#38bdf8';
+      }
+      if (nodeBtnLocal) nodeBtnLocal.classList.remove('active');
+      if (nodeBtnWestc) nodeBtnWestc.classList.add('active');
+    } else {
+      if (currentNodeBadge) {
+        currentNodeBadge.innerText = '🖥️ 本地环境 (Local)';
+        currentNodeBadge.style.color = '#38bdf8';
+        currentNodeBadge.style.borderColor = 'rgba(56, 189, 248, 0.3)';
+      }
+      if (nodeBtnLocal) nodeBtnLocal.classList.add('active');
+      if (nodeBtnWestc) nodeBtnWestc.classList.remove('active');
+    }
   }
 
   // 2. 指标卡片
@@ -407,6 +432,53 @@ if (hideEmptyCheckbox) {
   hideEmptyCheckbox.addEventListener('change', () => {
     renderConversationsDropdown();
     showToast(hideEmptyCheckbox.checked ? '已隐藏未发言空白会话' : '已显示所有会话', '👁️');
+  });
+}
+
+// 节点切换事件
+if (nodeBtnLocal) {
+  nodeBtnLocal.addEventListener('click', async () => {
+    showToast('正在切换至本地开发区...', '🔄');
+    try {
+      const res = await fetch('/api/set_node', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ node_type: 'local' })
+      });
+      const data = await res.json();
+      if (data.ok) {
+        conversationsList = data.conversations || [];
+        renderConversationsDropdown();
+        fetchStatus();
+        fetchLogs();
+        showToast('已切换至本地工作区！', '🖥️');
+      }
+    } catch (e) {
+      showToast('切换本地节点失败', '✖');
+    }
+  });
+}
+
+if (nodeBtnWestc) {
+  nodeBtnWestc.addEventListener('click', async () => {
+    showToast('正在连接恒源云 (seetacloud-westc) 并检索会话...', '⏳');
+    try {
+      const res = await fetch('/api/set_node', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ node_type: 'ssh:seetacloud-westc' })
+      });
+      const data = await res.json();
+      if (data.ok) {
+        conversationsList = data.conversations || [];
+        renderConversationsDropdown();
+        fetchStatus();
+        fetchLogs();
+        showToast('已成功连接远程 seetacloud-westc 节点！', '☁️');
+      }
+    } catch (e) {
+      showToast('连接远程节点失败', '✖');
+    }
   });
 }
 

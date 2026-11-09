@@ -1,9 +1,12 @@
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Antigravity Auto-Pilot UI Dashboard - High-Performance Web Server
-Author: Pair Programming with Antigravity
-Provides a web-based GUI to monitor, control, start, stop, and trigger Antigravity automation.
-Zero external pip dependencies (powered by Python standard library).
+Antigravity Auto-Pilot Web 控制中心与自驱巡航守护服务 (Dual Node: Local & Remote SSH)
+==================================================================================
+支持：
+  1. 🏠 本地电脑 Antigravity IDE 对话自动巡航与静默指令注入
+  2. ☁️ 远程 SSH 主机（如 seetacloud-westc 恒源云节点）对话环境自动对接、心跳保活与静默注入
+  3. 双向无感 WebSocket / REST 控制台，实时步骤监控、冷却倒计时、声音提示与日志审计
 """
 
 import os
@@ -13,7 +16,7 @@ import time
 import subprocess
 import threading
 from collections import deque
-from http.server import HTTPServer, SimpleHTTPRequestHandler
+from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from typing import Dict, Any, List, Optional
 
 # Ensure UTF-8 on Windows
@@ -44,10 +47,12 @@ COMPLETION_KEYWORDS = [
 
 
 class AutoPilotDaemon:
-    """Core daemon managing background inspection and injection loops."""
+    """Core daemon managing local & remote SSH inspection and injection loops."""
 
     def __init__(self):
         self.lock = threading.Lock()
+        self.node_type = "local"  # "local" or "ssh:seetacloud-westc"
+        self.remote_host = "seetacloud-westc"
         self.is_running = False
         self.state_name = "STOPPED"  # STOPPED, IDLE, BUSY, STABILIZING, TRIGGERING, COMPLETED
         self.target_conv_id = ""
@@ -67,6 +72,9 @@ class AutoPilotDaemon:
         # Load initial config if present
         self.load_config()
 
+        # Start SSH keepalive background thread
+        self._start_ssh_keepalive()
+
     def add_log(self, text: str, level: str = "INFO"):
         ts = time.strftime("%H:%M:%S")
         entry = {
@@ -78,11 +86,36 @@ class AutoPilotDaemon:
             self.logs.append(entry)
         print(f"[{ts}] [{level}] {text}")
 
+    def _start_ssh_keepalive(self):
+        def keepalive_worker():
+            while True:
+                time.sleep(20)
+                with self.lock:
+                    nt = self.node_type
+                if nt.startswith("ssh:"):
+                    host = nt.split("ssh:")[1]
+                    try:
+                        startupinfo = None
+                        if os.name == 'nt':
+                            startupinfo = subprocess.STARTUPINFO()
+                            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                        subprocess.run(
+                            ["ssh", "-o", "ConnectTimeout=5", "-o", "BatchMode=yes", host, "true"],
+                            capture_output=True,
+                            startupinfo=startupinfo,
+                            timeout=8
+                        )
+                    except Exception:
+                        pass
+        t = threading.Thread(target=keepalive_worker, daemon=True)
+        t.start()
+
     def load_config(self):
         if os.path.exists(CONFIG_PATH):
             try:
                 with open(CONFIG_PATH, "r", encoding="utf-8") as f:
                     cfg = json.load(f)
+                    self.node_type = cfg.get("node_type", "local")
                     self.target_conv_id = cfg.get("target_conversation_id", "").strip()
                     self.cooldown_seconds = float(cfg.get("idle_delay_seconds", 3))
                     self.max_turns = int(cfg.get("max_turns", 9999))
@@ -110,7 +143,65 @@ class AutoPilotDaemon:
         except Exception as e:
             self.add_log(f"保存 config.json 失败: {e}", "ERROR")
 
+    def set_node(self, node_type: str):
+        with self.lock:
+            old_node = self.node_type
+            self.node_type = node_type
+            if old_node != node_type:
+                self.target_conv_id = ""
+                self.idle_start_time = None
+                self.last_handled_step = -1
+                self.sent_count = 0
+                self.current_step = 0
+                self.last_snippet = ""
+                if self.is_running:
+                    self.is_running = False
+                    self.state_name = "STOPPED"
+
+        self.add_log(f"已切换工作节点 -> {node_type}", "INFO")
+        convs = self.scan_conversations(limit=1)
+        if convs:
+            with self.lock:
+                self.target_conv_id = convs[0]["id"]
+            self.add_log(f"已自动对准该节点最新活跃会话: [{self.target_conv_id[:8]}...]", "SUCCESS")
+        self.save_config({"node_type": node_type, "target_conversation_id": self.target_conv_id})
+
     def scan_conversations(self, limit: int = 50) -> List[Dict[str, Any]]:
+        with self.lock:
+            node = self.node_type
+            target_id = self.target_conv_id
+
+        # 1. 远程 SSH 扫描
+        if node.startswith("ssh:"):
+            host = node.split("ssh:")[1]
+            try:
+                startupinfo = None
+                if os.name == 'nt':
+                    startupinfo = subprocess.STARTUPINFO()
+                    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                cmd = ["ssh", host, f"python3 /root/.gemini/antigravity-ide/bin/remote_scan.py {limit}"]
+                res = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    startupinfo=startupinfo,
+                    timeout=12
+                )
+                if res.returncode == 0:
+                    for line in reversed(res.stdout.strip().split("\n")):
+                        line = line.strip()
+                        if line.startswith("[") and line.endswith("]"):
+                            data = json.loads(line)
+                            for c in data:
+                                c["is_current"] = (c["id"] == target_id)
+                            return data
+            except Exception as e:
+                self.add_log(f"远程节点 [{host}] 扫描会话失败: {e}", "WARN")
+            return []
+
+        # 2. 本地扫描
         if not os.path.exists(BRAIN_DIR):
             return []
 
@@ -129,7 +220,8 @@ class AutoPilotDaemon:
                     "preview": preview,
                     "step_count": step_count,
                     "is_empty": is_empty,
-                    "is_current": (entry == self.target_conv_id)
+                    "is_remote": False,
+                    "is_current": (entry == target_id)
                 })
 
         convs.sort(key=lambda x: x["mtime"], reverse=True)
@@ -165,6 +257,40 @@ class AutoPilotDaemon:
             return 0
 
     def send_message(self, conv_id: str, text: str) -> bool:
+        with self.lock:
+            node = self.node_type
+
+        startupinfo = None
+        if os.name == 'nt':
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+
+        # 1. 远程 SSH 注入
+        if node.startswith("ssh:"):
+            host = node.split("ssh:")[1]
+            try:
+                cmd = ["ssh", host, f"/root/.gemini/antigravity-ide/bin/agentapi_auto.sh send-message {conv_id} {json.dumps(text)}"]
+                res = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    startupinfo=startupinfo,
+                    timeout=15
+                )
+                if res.returncode == 0:
+                    self.add_log(f"成功向远程 [{host} / {conv_id[:8]}...] 注入指令: \"{text}\"", "TRIGGER")
+                    return True
+                else:
+                    err_msg = res.stderr.strip() or res.stdout.strip()
+                    self.add_log(f"远程注入失败 ({host}): {err_msg}", "ERROR")
+                    return False
+            except Exception as e:
+                self.add_log(f"远程注入异常: {e}", "ERROR")
+                return False
+
+        # 2. 本地注入
         cmd = []
         if os.path.exists(LS_EXE):
             cmd = [LS_EXE, "agentapi", "send-message", conv_id, text]
@@ -175,11 +301,6 @@ class AutoPilotDaemon:
             return False
 
         try:
-            startupinfo = None
-            if os.name == 'nt':
-                startupinfo = subprocess.STARTUPINFO()
-                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-
             res = subprocess.run(
                 cmd,
                 capture_output=True,
@@ -190,13 +311,13 @@ class AutoPilotDaemon:
                 timeout=10
             )
             if res.returncode == 0:
-                self.add_log(f"成功向会话 [{conv_id[:8]}...] 注入指令: \"{text}\"", "TRIGGER")
+                self.add_log(f"成功向本地会话 [{conv_id[:8]}...] 注入指令: \"{text}\"", "TRIGGER")
                 return True
             else:
-                self.add_log(f"注入失败 (Code {res.returncode}): {res.stderr.strip()}", "ERROR")
+                self.add_log(f"本地注入失败 (Code {res.returncode}): {res.stderr.strip()}", "ERROR")
                 return False
         except Exception as e:
-            self.add_log(f"执行进程异常: {e}", "ERROR")
+            self.add_log(f"本地执行进程异常: {e}", "ERROR")
             return False
 
     def trigger_once(self, conv_id: Optional[str] = None, text: Optional[str] = None) -> bool:
@@ -230,13 +351,15 @@ class AutoPilotDaemon:
 
             # Save in config
             self.save_config({
+                "node_type": self.node_type,
                 "target_conversation_id": self.target_conv_id,
                 "continue_prompt": self.prompt_text,
                 "idle_delay_seconds": self.cooldown_seconds,
                 "max_turns": self.max_turns
             })
 
-            self.add_log(f"🚀 自驱巡航已启动！目标会话: {self.target_conv_id[:12]}... (冷却: {self.cooldown_seconds}s)", "SUCCESS")
+            node_label = f"远程 {self.node_type}" if self.node_type.startswith("ssh:") else "本地"
+            self.add_log(f"🚀 自驱巡航已启动！节点: {node_label} · 目标会话: {self.target_conv_id[:12]}... (冷却: {self.cooldown_seconds}s)", "SUCCESS")
 
             self.worker_thread = threading.Thread(target=self._worker_loop, daemon=True)
             self.worker_thread.start()
@@ -260,26 +383,21 @@ class AutoPilotDaemon:
                 cooldown = self.cooldown_seconds
                 max_t = self.max_turns
                 p_text = self.prompt_text
-
-            transcript_path = os.path.join(BRAIN_DIR, cid, ".system_generated", "logs", "transcript.jsonl")
+                node = self.node_type
 
             # Dynamic switch if unlocked
             if not locked:
                 recent = self.scan_conversations(limit=1)
                 if recent and recent[0]["id"] != cid:
-                    curr_mtime = os.path.getmtime(transcript_path) if os.path.exists(transcript_path) else 0
-                    new_mtime = recent[0]["mtime"]
-                    if new_mtime > curr_mtime + 4.0:
-                        with self.lock:
-                            self.target_conv_id = recent[0]["id"]
-                            self.idle_start_time = None
-                            self.last_handled_step = -1
-                            cid = self.target_conv_id
-                            transcript_path = os.path.join(BRAIN_DIR, cid, ".system_generated", "logs", "transcript.jsonl")
-                        self.add_log(f"自动跟随最新活跃对话: {cid[:8]}...", "INFO")
+                    with self.lock:
+                        self.target_conv_id = recent[0]["id"]
+                        self.idle_start_time = None
+                        self.last_handled_step = -1
+                        cid = self.target_conv_id
+                    self.add_log(f"自动跟随最新活跃对话: {cid[:8]}...", "INFO")
 
-            # Check last step info
-            step_idx, finished, is_completed, snippet = self._get_step_info(transcript_path)
+            # Check step info
+            step_idx, finished, is_completed, snippet = self._get_step_info(cid)
             now = time.time()
 
             with self.lock:
@@ -314,7 +432,8 @@ class AutoPilotDaemon:
                         self.idle_start_time = None
                         self.cooldown_remaining = 0.0
 
-                    self.add_log(f"检测到第 {step_idx} 步完成，自动注入第 {current_count} 轮: \"{p_text}\"", "TRIGGER")
+                    node_tag = f"[{node}] " if node.startswith("ssh:") else ""
+                    self.add_log(f"{node_tag}检测到第 {step_idx} 步完成，自动注入第 {current_count} 轮: \"{p_text}\"", "TRIGGER")
                     self.send_message(cid, p_text)
 
                     if current_count >= max_t:
@@ -329,9 +448,50 @@ class AutoPilotDaemon:
                     self.cooldown_remaining = 0.0
                     self.state_name = "BUSY" if not finished else "IDLE"
 
-            time.sleep(0.8)
+            # Polling delay: slightly longer for remote SSH
+            delay = 1.2 if node.startswith("ssh:") else 0.8
+            time.sleep(delay)
 
-    def _get_step_info(self, transcript_path: str):
+    def _get_step_info(self, conv_id: str):
+        with self.lock:
+            node = self.node_type
+
+        startupinfo = None
+        if os.name == 'nt':
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+
+        # 1. 远程 SSH 检查
+        if node.startswith("ssh:"):
+            host = node.split("ssh:")[1]
+            try:
+                cmd = ["ssh", host, f"python3 /root/.gemini/antigravity-ide/bin/remote_status.py {conv_id}"]
+                res = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    startupinfo=startupinfo,
+                    timeout=10
+                )
+                if res.returncode == 0:
+                    for line in reversed(res.stdout.strip().split("\n")):
+                        line = line.strip()
+                        if line.startswith("{") and line.endswith("}"):
+                            data = json.loads(line)
+                            step_idx = data.get("step_index", -1)
+                            finished = data.get("is_turn_complete", False)
+                            snippet = data.get("snippet", "")
+                            content_lower = snippet.lower()
+                            is_completed = finished and any(k in content_lower for k in COMPLETION_KEYWORDS)
+                            return step_idx, finished, is_completed, snippet
+            except Exception as e:
+                return -1, False, False, f"远程检测失败: {e}"
+            return -1, False, False, ""
+
+        # 2. 本地检查
+        transcript_path = os.path.join(BRAIN_DIR, conv_id, ".system_generated", "logs", "transcript.jsonl")
         if not os.path.exists(transcript_path):
             return -1, False, False, ""
         try:
@@ -358,9 +518,13 @@ class AutoPilotDaemon:
     def get_status_payload(self) -> Dict[str, Any]:
         with self.lock:
             lsp_exists = os.path.exists(LS_EXE) or os.path.exists(AGENTAPI_BAT)
+            is_remote = self.node_type.startswith("ssh:")
             return {
                 "running": self.is_running,
                 "state": self.state_name,
+                "node_type": self.node_type,
+                "is_remote": is_remote,
+                "remote_host": self.node_type.split("ssh:")[1] if is_remote else "",
                 "target_conv_id": self.target_conv_id,
                 "is_locked": self.is_locked,
                 "prompt_text": self.prompt_text,
@@ -370,8 +534,8 @@ class AutoPilotDaemon:
                 "current_step": self.current_step,
                 "last_snippet": self.last_snippet,
                 "cooldown_remaining": self.cooldown_remaining,
-                "lsp_ok": lsp_exists,
-                "lsp_path": LS_EXE if os.path.exists(LS_EXE) else AGENTAPI_BAT,
+                "lsp_ok": True if is_remote else lsp_exists,
+                "lsp_path": (f"SSH AgentAPI ({self.node_type})" if is_remote else (LS_EXE if os.path.exists(LS_EXE) else AGENTAPI_BAT)),
                 "pid": os.getpid()
             }
 
@@ -414,7 +578,7 @@ class AutoPilotHTTPHandler(SimpleHTTPRequestHandler):
         if path == "/api/status":
             self.send_json(daemon.get_status_payload())
         elif path == "/api/conversations":
-            convs = daemon.scan_conversations(limit=25)
+            convs = daemon.scan_conversations(limit=40)
             self.send_json(convs)
         elif path == "/api/logs":
             with daemon.lock:
@@ -434,7 +598,17 @@ class AutoPilotHTTPHandler(SimpleHTTPRequestHandler):
         except Exception:
             body = {}
 
-        if path == "/api/start":
+        if path == "/api/set_node":
+            node = body.get("node_type", "local").strip()
+            daemon.set_node(node)
+            self.send_json({
+                "ok": True,
+                "node_type": daemon.node_type,
+                "status": daemon.get_status_payload(),
+                "conversations": daemon.scan_conversations(limit=40)
+            })
+
+        elif path == "/api/start":
             conv_id = body.get("conv_id", "").strip()
             prompt = body.get("prompt", "继续").strip()
             cooldown = float(body.get("cooldown", 3.0))
@@ -471,22 +645,24 @@ def main():
     if not os.path.exists(WEB_DIR):
         os.makedirs(WEB_DIR, exist_ok=True)
 
-    server = HTTPServer(("0.0.0.0", PORT), AutoPilotHTTPHandler)
+    server = ThreadingHTTPServer(("0.0.0.0", PORT), AutoPilotHTTPHandler)
     daemon.add_log(f"Web 控制中心已就绪: http://localhost:{PORT}", "SUCCESS")
     print("=" * 65)
-    print(f"   ⚡ Antigravity Auto-Pilot UI 控制中心")
+    print("   ⚡ Antigravity Auto-Pilot UI 控制中心 (Dual-Node Local/SSH)")
     print("=" * 65)
     print(f"[*] 本地 Web 控制台 : http://localhost:{PORT}")
-    print(f"[*] Language Server : {'OK (已检测到)' if os.path.exists(LS_EXE) else '缺失'}")
-    print(f"[*] 默认监控会话   : {daemon.target_conv_id}")
+    print(f"[*] 当前执行节点    : {daemon.node_type}")
+    print(f"[*] 默认监控会话    : {daemon.target_conv_id}")
     print("按 Ctrl+C 退出 Web 服务\n")
 
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        print("\n[退出] Web 服务已关闭。")
+        print("\n正在停止服务...")
+    finally:
         daemon.stop()
         server.server_close()
+        print("[*] 服务已退出。")
 
 
 if __name__ == "__main__":
