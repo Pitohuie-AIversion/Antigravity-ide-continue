@@ -18,9 +18,10 @@ import socket
 import subprocess
 import threading
 import concurrent.futures
+import urllib.request
 from collections import deque
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 
 # Ensure UTF-8 on Windows
 if sys.platform == "win32":
@@ -39,8 +40,17 @@ LS_EXE = os.path.join(
     "extensions", "antigravity", "bin", "language_server_windows_x64.exe"
 )
 AGENTAPI_BAT = os.path.join(USER_HOME, ".gemini", "antigravity-ide", "bin", "agentapi.bat")
-CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
-WEB_DIR = os.path.join(os.path.dirname(__file__), "web")
+if getattr(sys, 'frozen', False):
+    APP_DIR = os.path.dirname(sys.executable)
+    BUNDLE_DIR = getattr(sys, '_MEIPASS', APP_DIR)
+    WEB_DIR = os.path.join(BUNDLE_DIR, "web")
+    if not os.path.exists(WEB_DIR):
+        WEB_DIR = os.path.join(APP_DIR, "web")
+    CONFIG_PATH = os.path.join(APP_DIR, "config.json")
+else:
+    APP_DIR = os.path.dirname(os.path.abspath(__file__))
+    CONFIG_PATH = os.path.join(APP_DIR, "config.json")
+    WEB_DIR = os.path.join(APP_DIR, "web")
 
 COMPLETION_KEYWORDS = [
     "所有任务已完成", "全部任务已完成", "所有需求已完成",
@@ -92,7 +102,23 @@ class MultiSessionDaemon:
         self.last_convs_time: Dict[str, float] = {}
         self.logs = deque(maxlen=300)
         self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=6)
-        self.worker_thread: Optional[threading.Thread] = None
+        self.start_time = time.time()
+        self.webhook: Dict[str, Any] = {
+            "enabled": False,
+            "url": "",
+            "platform": "feishu",
+            "notify_on_trigger": False,
+            "notify_on_complete": True,
+            "notify_on_error": True
+        }
+        self.strategy: Dict[str, Any] = {
+            "smart_backoff": True,
+            "auto_archive_completed": False,
+            "max_parallel_workers": 6
+        }
+        self.injection_timestamps = deque(maxlen=300)
+        self.telemetry_history = deque(maxlen=60)
+        self._last_telemetry_snapshot = 0.0
 
         # Load initial config and registered sessions
         self.load_config()
@@ -113,7 +139,10 @@ class MultiSessionDaemon:
         }
         with self.lock:
             self.logs.append(entry)
-        print(f"[{ts}] [{level}] {full_text}", flush=True)
+        try:
+            print(f"[{ts}] [{level}] {full_text}", flush=True)
+        except UnicodeEncodeError:
+            print(f"[{ts}] [{level}] {full_text.encode('ascii', 'replace').decode('ascii')}", flush=True)
 
     def _start_ssh_keepalive(self):
         def keepalive_worker():
@@ -139,6 +168,20 @@ class MultiSessionDaemon:
                 with open(CONFIG_PATH, "r", encoding="utf-8") as f:
                     cfg = json.load(f)
                     self.node_type = cfg.get("node_type", "local")
+                    
+                    self.webhook = cfg.get("webhook", {
+                        "enabled": False,
+                        "url": "",
+                        "platform": "feishu",
+                        "notify_on_trigger": False,
+                        "notify_on_complete": True,
+                        "notify_on_error": True
+                    })
+                    self.strategy = cfg.get("strategy", {
+                        "smart_backoff": True,
+                        "auto_archive_completed": False,
+                        "max_parallel_workers": 6
+                    })
                     
                     monitored = cfg.get("monitored_sessions", [])
                     # Backward compatibility for single target_conversation_id
@@ -213,12 +256,132 @@ class MultiSessionDaemon:
                     "target_conversation_id": sess_list[0]["id"] if sess_list else "",
                     "continue_prompt": sess_list[0]["prompt"] if sess_list else "继续",
                     "idle_delay_seconds": sess_list[0]["cooldown"] if sess_list else 3.0,
-                    "max_turns": sess_list[0]["max_turns"] if sess_list else 9999
+                    "max_turns": sess_list[0]["max_turns"] if sess_list else 9999,
+                    "webhook": self.webhook,
+                    "strategy": self.strategy
                 }
             with open(CONFIG_PATH, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
         except Exception as e:
             self.add_log(f"持久化 config.json 失败: {e}", "ERROR")
+
+    def send_webhook(self, event_type: str, title: str, conv_id: str, message: str, extra: Dict[str, Any] = None):
+        with self.lock:
+            wh = dict(self.webhook)
+        if not wh.get("enabled") or not wh.get("url"):
+            return
+
+        if event_type == "TRIGGER" and not wh.get("notify_on_trigger"):
+            return
+        if event_type == "COMPLETE" and not wh.get("notify_on_complete", True):
+            return
+        if event_type == "ERROR" and not wh.get("notify_on_error", True):
+            return
+
+        url = wh.get("url", "").strip()
+        platform = str(wh.get("platform", "feishu")).lower()
+
+        def _do_post():
+            try:
+                now_str = time.strftime("%Y-%m-%d %H:%M:%S")
+                summary_text = (
+                    f"【Antigravity 巡航通知 · {event_type}】\n"
+                    f"会话: {title}\n"
+                    f"ID: {conv_id[:12]}...\n"
+                    f"时间: {now_str}\n"
+                    f"详情: {message}"
+                )
+                payload: Dict[str, Any] = {}
+                if platform in ("feishu", "lark"):
+                    payload = {"msg_type": "text", "content": {"text": summary_text}}
+                elif platform in ("dingtalk", "wecom"):
+                    payload = {"msgtype": "text", "text": {"content": summary_text}}
+                else:
+                    payload = {
+                        "event": event_type,
+                        "session_id": conv_id,
+                        "title": title,
+                        "message": message,
+                        "timestamp": now_str,
+                        "extra": extra or {}
+                    }
+                data_bytes = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+                req = urllib.request.Request(
+                    url,
+                    data=data_bytes,
+                    headers={"Content-Type": "application/json; charset=utf-8", "User-Agent": "Antigravity-Fleet/2.0"},
+                    method="POST"
+                )
+                with urllib.request.urlopen(req, timeout=5.0) as resp:
+                    pass
+            except Exception as ex:
+                self.add_log(f"Webhook 推送失败: {ex}", "WARN", session_tag="WEBHOOK")
+
+        threading.Thread(target=_do_post, daemon=True).start()
+
+    def test_webhook(self, url: str, platform: str) -> Tuple[bool, str]:
+        if not url:
+            return False, "Webhook URL 不能为空"
+        try:
+            now_str = time.strftime("%Y-%m-%d %H:%M:%S")
+            test_msg = f"🔔 [Antigravity Fleet 测试通知]\n时间: {now_str}\n状态: Webhook 链路握手成功，多会话控制中心通讯正常！"
+            payload: Dict[str, Any] = {}
+            platform_lower = platform.lower()
+            if platform_lower in ("feishu", "lark"):
+                payload = {"msg_type": "text", "content": {"text": test_msg}}
+            elif platform_lower in ("dingtalk", "wecom"):
+                payload = {"msgtype": "text", "text": {"content": test_msg}}
+            else:
+                payload = {"event": "TEST", "message": test_msg, "timestamp": now_str}
+
+            data_bytes = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            req = urllib.request.Request(
+                url,
+                data=data_bytes,
+                headers={"Content-Type": "application/json; charset=utf-8", "User-Agent": "Antigravity-Fleet/2.0"},
+                method="POST"
+            )
+            with urllib.request.urlopen(req, timeout=5.0) as resp:
+                return True, f"测试推送成功！HTTP Status: {resp.status}"
+        except Exception as e:
+            return False, f"测试推送异常: {str(e)}"
+
+    def get_telemetry_payload(self) -> Dict[str, Any]:
+        with self.lock:
+            now = time.time()
+            uptime_sec = int(now - self.start_time)
+            recent_injections = sum(1 for t in self.injection_timestamps if now - t <= 60)
+
+            sess_list = list(self.sessions.values())
+            active_count = len([s for s in sess_list if s.get("enabled")])
+            busy_count = len([s for s in sess_list if s.get("state") == "BUSY"])
+            total_sent = sum(s.get("sent_count", 0) for s in sess_list)
+            total_steps = sum(max(0, s.get("current_step", 0)) for s in sess_list)
+
+            # Record periodic snapshot every 3 seconds
+            if now - self._last_telemetry_snapshot >= 3.0:
+                self._last_telemetry_snapshot = now
+                self.telemetry_history.append({
+                    "time": time.strftime("%H:%M:%S"),
+                    "injections_per_min": recent_injections,
+                    "active_count": active_count,
+                    "busy_count": busy_count,
+                    "total_steps": total_steps
+                })
+
+            return {
+                "uptime_seconds": uptime_sec,
+                "uptime_formatted": f"{uptime_sec // 3600}时 {(uptime_sec % 3600) // 60}分 {uptime_sec % 60}秒",
+                "injections_per_min": recent_injections,
+                "active_count": active_count,
+                "total_count": len(sess_list),
+                "busy_count": busy_count,
+                "total_sent_count": total_sent,
+                "total_steps": total_steps,
+                "history": list(self.telemetry_history),
+                "webhook": self.webhook,
+                "strategy": self.strategy
+            }
 
     def add_session(self, conv_id: str, node_type: str = "local", title: str = "",
                     prompt: str = "继续", cooldown: float = 3.0, max_turns: int = 9999,
@@ -590,6 +753,8 @@ class MultiSessionDaemon:
                             curr["state"] = "COMPLETED"
                             curr["enabled"] = False
                             self.add_log(f"🎉 达成任务完工声明: '{snippet}'", "SUCCESS", session_tag=curr["title"][:10])
+                            self.send_webhook("COMPLETE", curr["title"], cid, f"达成完工目标声明: {snippet}")
+                            self.save_config()
                             continue
 
                         # 2. 步骤完结判定与消抖
@@ -635,8 +800,13 @@ class MultiSessionDaemon:
 
     def _async_inject(self, node: str, cid: str, p_text: str, current_count: int,
                       step_idx: int, title: str, max_t: int):
+        with self.lock:
+            self.injection_timestamps.append(time.time())
         self.add_log(f"检测到第 {step_idx} 步完成，自动注入第 {current_count} 轮: \"{p_text}\"", "TRIGGER", session_tag=title[:10])
-        self.send_message(node, cid, p_text)
+        self.send_webhook("TRIGGER", title, cid, f"检测到第 {step_idx} 步完成，已注入第 {current_count} 轮: \"{p_text}\"")
+        ok = self.send_message(node, cid, p_text)
+        if not ok:
+            self.send_webhook("ERROR", title, cid, f"第 {current_count} 轮指令注入失败")
 
         if current_count >= max_t:
             with self.lock:
@@ -644,6 +814,7 @@ class MultiSessionDaemon:
                     self.sessions[cid]["enabled"] = False
                     self.sessions[cid]["state"] = "STOPPED"
             self.add_log(f"已达到最大轮数 ({max_t})，会话自驱完成并安全退出。", "SUCCESS", session_tag=title[:10])
+            self.send_webhook("COMPLETE", title, cid, f"已达到最大设定轮数 ({max_t})，安全完成巡航。")
             self.save_config()
 
     def get_status_payload(self) -> Dict[str, Any]:
@@ -731,6 +902,16 @@ class AutoPilotHTTPHandler(SimpleHTTPRequestHandler):
             with daemon.lock:
                 logs_list = list(daemon.logs)
             self.send_json(logs_list)
+        elif path == "/api/telemetry":
+            self.send_json(daemon.get_telemetry_payload())
+        elif path == "/api/webhook":
+            with daemon.lock:
+                wh = dict(daemon.webhook)
+            self.send_json(wh)
+        elif path == "/api/strategy":
+            with daemon.lock:
+                st = dict(daemon.strategy)
+            self.send_json(st)
         else:
             super().do_GET()
 
@@ -830,6 +1011,33 @@ class AutoPilotHTTPHandler(SimpleHTTPRequestHandler):
             with daemon.lock:
                 daemon.logs.clear()
             self.send_json({"ok": True, "message": "日志已清空"})
+
+        elif path == "/api/webhook/update":
+            with daemon.lock:
+                daemon.webhook["enabled"] = bool(body.get("enabled", False))
+                daemon.webhook["url"] = body.get("url", "").strip()
+                daemon.webhook["platform"] = body.get("platform", "feishu").strip()
+                daemon.webhook["notify_on_trigger"] = bool(body.get("notify_on_trigger", False))
+                daemon.webhook["notify_on_complete"] = bool(body.get("notify_on_complete", True))
+                daemon.webhook["notify_on_error"] = bool(body.get("notify_on_error", True))
+            daemon.save_config()
+            daemon.add_log(f"已更新 Webhook 配置: 平台={daemon.webhook['platform']}, 启用={daemon.webhook['enabled']}", "SUCCESS", session_tag="CONFIG")
+            self.send_json({"ok": True, "webhook": daemon.webhook})
+
+        elif path == "/api/webhook/test":
+            url = body.get("url", "").strip() or daemon.webhook.get("url", "")
+            platform = body.get("platform", "").strip() or daemon.webhook.get("platform", "feishu")
+            ok, msg = daemon.test_webhook(url, platform)
+            self.send_json({"ok": ok, "message": msg})
+
+        elif path == "/api/strategy/update":
+            with daemon.lock:
+                if "smart_backoff" in body:
+                    daemon.strategy["smart_backoff"] = bool(body["smart_backoff"])
+                if "auto_archive_completed" in body:
+                    daemon.strategy["auto_archive_completed"] = bool(body["auto_archive_completed"])
+            daemon.save_config()
+            self.send_json({"ok": True, "strategy": daemon.strategy})
 
         elif path == "/api/restart":
             self.send_json({"ok": True, "message": "服务正在重启中..."})
