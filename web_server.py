@@ -710,6 +710,64 @@ class MultiSessionDaemon:
         except Exception:
             return -1, False, False, ""
 
+    def get_session_transcript(self, conv_id: str, node: str = "local", limit: int = 15) -> List[Dict[str, Any]]:
+        conv_id = conv_id.strip()
+        if not conv_id:
+            return []
+
+        if node.startswith("ssh:"):
+            host = node.split("ssh:")[1]
+            try:
+                cmd = f"python3 /root/.gemini/antigravity-ide/bin/remote_status.py --transcript {conv_id} {limit}"
+                res = run_ssh(host, cmd, timeout=7.0)
+                if res.returncode == 0:
+                    for line in reversed(res.stdout.strip().split("\n")):
+                        line = line.strip()
+                        if line.startswith("{") and line.endswith("}"):
+                            data = json.loads(line)
+                            return data.get("steps", [])
+            except Exception:
+                pass
+            return []
+
+        # Local lookup
+        target_dir = os.path.join(BRAIN_DIR, conv_id)
+        if not os.path.exists(target_dir):
+            import glob
+            matches = glob.glob(os.path.join(BRAIN_DIR, conv_id + "*"))
+            if matches:
+                target_dir = matches[0]
+
+        transcript_path = os.path.join(target_dir, ".system_generated", "logs", "transcript.jsonl")
+        if not os.path.exists(transcript_path):
+            return []
+
+        try:
+            with open(transcript_path, "r", encoding="utf-8", errors="ignore") as f:
+                lines = [l.strip() for l in f if l.strip()]
+
+            steps = []
+            for line_str in lines[-limit:]:
+                try:
+                    step = json.loads(line_str)
+                    content = str(step.get("content", "")).strip()
+                    if "<USER_REQUEST>" in content:
+                        content = content.split("<USER_REQUEST>")[1].split("</USER_REQUEST>")[0].strip()
+                    tool_names = [t.get("name") or t.get("tool") or "tool" for t in step.get("tool_calls", []) if isinstance(t, dict)]
+                    steps.append({
+                        "step_index": step.get("step_index", -1),
+                        "type": step.get("type", ""),
+                        "source": step.get("source", ""),
+                        "status": step.get("status", ""),
+                        "tool_calls": tool_names,
+                        "content": content[:600] if len(content) > 600 else content,
+                    })
+                except Exception:
+                    continue
+            return steps
+        except Exception:
+            return []
+
     def _worker_loop(self):
         """High-performance concurrent loop servicing all active sessions."""
         while True:
@@ -914,6 +972,57 @@ class AutoPilotHTTPHandler(SimpleHTTPRequestHandler):
             with daemon.lock:
                 st = dict(daemon.strategy)
             self.send_json(st)
+        elif path == "/api/sessions/transcript":
+            cid = ""
+            node = "local"
+            limit = 12
+            if "conv_id=" in self.path:
+                cid = self.path.split("conv_id=")[1].split("&")[0]
+            if "node=" in self.path:
+                node = self.path.split("node=")[1].split("&")[0]
+            if "limit=" in self.path:
+                try:
+                    limit = int(self.path.split("limit=")[1].split("&")[0])
+                except Exception:
+                    pass
+            steps = daemon.get_session_transcript(cid, node=node, limit=limit)
+            self.send_json({"ok": True, "conv_id": cid, "steps": steps})
+        elif path == "/preview" or path == "/preview/":
+            seagent_dir = os.path.join(os.path.dirname(APP_DIR), "seagent2.1")
+            preview_file = os.path.join(seagent_dir, "preview.html")
+            if os.path.exists(preview_file):
+                with open(preview_file, "rb") as f:
+                    content = f.read()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(content)))
+                self.end_headers()
+                self.wfile.write(content)
+            else:
+                self.send_response(404)
+                self.end_headers()
+        elif path.startswith("/preview/"):
+            rel_file = path[len("/preview/"):]
+            seagent_dir = os.path.join(os.path.dirname(APP_DIR), "seagent2.1")
+            target_file = os.path.normpath(os.path.join(seagent_dir, rel_file))
+            if target_file.startswith(seagent_dir) and os.path.exists(target_file) and os.path.isfile(target_file):
+                mime = "text/plain"
+                if target_file.endswith(".html"): mime = "text/html; charset=utf-8"
+                elif target_file.endswith(".js"): mime = "application/javascript; charset=utf-8"
+                elif target_file.endswith(".css") or target_file.endswith(".wxss"): mime = "text/css; charset=utf-8"
+                elif target_file.endswith(".json"): mime = "application/json; charset=utf-8"
+                elif target_file.endswith(".png"): mime = "image/png"
+                elif target_file.endswith(".jpg"): mime = "image/jpeg"
+                with open(target_file, "rb") as f:
+                    data = f.read()
+                self.send_response(200)
+                self.send_header("Content-Type", mime)
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+            else:
+                self.send_response(404)
+                self.end_headers()
         else:
             super().do_GET()
 
@@ -1046,12 +1155,15 @@ class AutoPilotHTTPHandler(SimpleHTTPRequestHandler):
             def restart_worker():
                 time.sleep(0.5)
                 daemon.stop_all()
-                python_exe = sys.executable
-                script_path = os.path.abspath(__file__)
-                if os.name == 'nt':
-                    subprocess.Popen([python_exe, "-u", script_path], creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS)
-                else:
-                    subprocess.Popen([python_exe, "-u", script_path])
+                try:
+                    if getattr(sys, "frozen", False):
+                        subprocess.Popen([sys.executable], cwd=APP_DIR)
+                    else:
+                        launcher_script = os.path.join(APP_DIR, "app_launcher.py")
+                        target = launcher_script if os.path.exists(launcher_script) else os.path.abspath(__file__)
+                        subprocess.Popen([sys.executable, target], cwd=APP_DIR)
+                except Exception as e:
+                    print(f"Restart error: {e}", flush=True)
                 os._exit(0)
             threading.Thread(target=restart_worker, daemon=True).start()
 

@@ -23,7 +23,7 @@
       "id": "d8b02da2-566d-47f4-9134-ba862677c798",
       "node_type": "ssh:seetacloud-westc",
       "title": "我的seagent下一步如何设计才能更符合定位",
-      "prompt": "继续推进下一项任务",
+      "prompt": "[/goal](slashCommand;goal) 继续全局开发",
       "cooldown": 3.0,
       "max_turns": 9999,
       "enabled": true

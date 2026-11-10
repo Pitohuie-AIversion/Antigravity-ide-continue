@@ -91,6 +91,17 @@ const saveWebhookBtn = document.getElementById('saveWebhookBtn');
 const platformPills = document.querySelectorAll('.platform-pill');
 let currentWebhookPlatform = 'feishu';
 
+// Transcript Modal Elements
+const transcriptModal = document.getElementById('transcriptModal');
+const transcriptModalTitle = document.getElementById('transcriptModalTitle');
+const transcriptTimeline = document.getElementById('transcriptTimeline');
+const refreshTranscriptBtn = document.getElementById('refreshTranscriptBtn');
+const closeTranscriptModalBtn = document.getElementById('closeTranscriptModalBtn');
+const copyTranscriptBtn = document.getElementById('copyTranscriptBtn');
+const closeTranscriptFooterBtn = document.getElementById('closeTranscriptFooterBtn');
+let currentTranscriptConv = { id: '', node: '' };
+let transcriptCache = [];
+
 // ==========================================================================
 // Safe Fetch with AbortController Timeout
 // ==========================================================================
@@ -382,6 +393,9 @@ function renderFleetMatrix(sessions) {
       </div>
 
       <div class="fleet-card-actions">
+        <button class="btn-card-action" onclick="handleCardTranscript('${s.id}', '${s.node_type}')" title="查看该会话最新步骤与转录回溯">
+          📜 进展
+        </button>
         <button class="btn-card-action primary" onclick="handleCardTrigger('${s.id}')" title="立即向该会话发送一次指令">
           ⚡ 立即注入
         </button>
@@ -484,6 +498,104 @@ window.handleCardRemove = async function(cid) {
     showToast('移除失败: ' + e.message, '✖');
   }
 };
+
+// ==========================================================================
+// 会话转录时光轴交互逻辑 (Transcript Inspector Modal)
+// ==========================================================================
+window.handleCardTranscript = async function(cid, node) {
+  currentTranscriptConv = { id: cid, node: node || 'local' };
+  const s = appState.sessions.find(item => item.id === cid);
+  const title = s ? s.title : cid.slice(0, 8);
+  if (transcriptModalTitle) transcriptModalTitle.textContent = `[${title.slice(0, 24)}] 最新执行进展回溯`;
+  if (transcriptModal) transcriptModal.style.display = 'flex';
+  await loadTranscriptTimeline();
+};
+
+async function loadTranscriptTimeline() {
+  if (!transcriptTimeline || !currentTranscriptConv.id) return;
+  transcriptTimeline.innerHTML = '<div class="timeline-empty">⏳ 正在同步最新会话转录...</div>';
+  try {
+    const url = `/api/sessions/transcript?conv_id=${encodeURIComponent(currentTranscriptConv.id)}&node=${encodeURIComponent(currentTranscriptConv.node)}&limit=15`;
+    const res = await safeFetch(url);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    transcriptCache = data.steps || [];
+
+    if (transcriptCache.length === 0) {
+      transcriptTimeline.innerHTML = '<div class="timeline-empty">🌱 暂无步骤记录或转录文件为空</div>';
+      return;
+    }
+
+    transcriptTimeline.innerHTML = '';
+    transcriptCache.forEach(st => {
+      const card = document.createElement('div');
+      const isUser = st.type === 'USER_INPUT' || st.source === 'USER_EXPLICIT';
+      const hasTools = st.tool_calls && st.tool_calls.length > 0;
+      card.className = `timeline-step-card ${isUser ? 'user' : (hasTools ? 'tool' : 'model')}`;
+
+      let toolsHtml = '';
+      if (hasTools) {
+        toolsHtml = `<div class="timeline-tool-tags">` +
+          st.tool_calls.map(t => `<span class="timeline-tool-tag">🛠️ ${escapeHtml(t)}</span>`).join('') +
+          `</div>`;
+      }
+
+      card.innerHTML = `
+        <div class="timeline-step-header">
+          <span class="timeline-step-index">Step ${st.step_index >= 0 ? st.step_index : '--'}</span>
+          <span class="timeline-step-type">${isUser ? '👤 用户 / 注入指令' : (hasTools ? '⚡ 工具调用中' : '🤖 AI 规划与回答')} [${escapeHtml(st.status || 'DONE')}]</span>
+        </div>
+        ${toolsHtml}
+        <div class="timeline-step-content">${escapeHtml(st.content || '(无文字输出)')}</div>
+      `;
+      transcriptTimeline.appendChild(card);
+    });
+
+    transcriptTimeline.parentElement.scrollTop = transcriptTimeline.parentElement.scrollHeight;
+  } catch (err) {
+    transcriptTimeline.innerHTML = `<div class="timeline-empty" style="color: #f43f5e;">同步转录失败: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+if (refreshTranscriptBtn) {
+  refreshTranscriptBtn.addEventListener('click', () => {
+    showToast('正在刷新步骤进展...', '🔄');
+    loadTranscriptTimeline();
+  });
+}
+
+if (closeTranscriptModalBtn && transcriptModal) {
+  closeTranscriptModalBtn.addEventListener('click', () => {
+    transcriptModal.style.display = 'none';
+  });
+}
+
+if (closeTranscriptFooterBtn && transcriptModal) {
+  closeTranscriptFooterBtn.addEventListener('click', () => {
+    transcriptModal.style.display = 'none';
+  });
+}
+
+if (transcriptModal) {
+  transcriptModal.addEventListener('click', (e) => {
+    if (e.target === transcriptModal) {
+      transcriptModal.style.display = 'none';
+    }
+  });
+}
+
+if (copyTranscriptBtn) {
+  copyTranscriptBtn.addEventListener('click', () => {
+    if (!transcriptCache || transcriptCache.length === 0) {
+      showToast('暂无内容可复制', '⚠️');
+      return;
+    }
+    const text = transcriptCache.map(st => `[Step ${st.step_index}] ${st.type} (${st.status}):\n${st.content}\n`).join('\n---\n');
+    navigator.clipboard.writeText(text).then(() => {
+      showToast('已复制最近步骤进展到剪贴板！', '📋');
+    });
+  });
+}
 
 // ==========================================================================
 // 会话下拉列表渲染
