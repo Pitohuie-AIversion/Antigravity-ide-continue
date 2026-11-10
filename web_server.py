@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Antigravity Auto-Pilot Web 控制中心与自驱巡航守护服务 (Dual Node: Local & Remote SSH)
-==================================================================================
-支持：
-  1. 🏠 本地电脑 Antigravity IDE 对话自动巡航与静默指令注入
-  2. ☁️ 远程 SSH 主机（如 seetacloud-westc 恒源云节点）对话环境自动对接、心跳保活与静默注入
-  3. 双向无感控制台，实时步骤监控、冷却倒计时、声音提示与日志审计
+Antigravity Auto-Pilot Web 控制中心与多会话并发自驱巡航守护引擎
+==============================================================
+特性：
+  1. 🚀 多会话并发监控矩阵 (Multi-Session Concurrent Fleet)：支持同时纳管多个对话，多线程独立轮询与状态机运转
+  2. 🌐 跨设备多节点支持：本地电脑 (Local Windows) 与 远程 SSH 主机 (如 seetacloud-westc 恒源云) 混合并发
+  3. ⏱ 独立消抖与冷却控制：每个会话独立步数跟踪、独立冷却倒计时、独立提示词注入与任务完工检测
+  4. ⚡ 非阻塞双栈通信：IPv4/IPv6 Dual-Stack HTTP 极速响应，线程安全可重入锁 (RLock) 杜绝死锁
 """
 
 import os
@@ -16,6 +17,7 @@ import time
 import socket
 import subprocess
 import threading
+import concurrent.futures
 from collections import deque
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from typing import Dict, Any, List, Optional
@@ -57,7 +59,7 @@ def run_ssh(host: str, remote_cmd: str, timeout: float = 8.0) -> subprocess.Comp
     cmd = [
         "ssh",
         "-o", "ClearAllForwardings=yes",
-        "-o", "ConnectTimeout=5",
+        "-o", "ConnectTimeout=4",
         "-o", "BatchMode=yes",
         "-o", "StrictHostKeyChecking=no",
         "-o", "UserKnownHostsFile=/dev/null",
@@ -77,63 +79,58 @@ def run_ssh(host: str, remote_cmd: str, timeout: float = 8.0) -> subprocess.Comp
     )
 
 
-class AutoPilotDaemon:
-    """Core daemon managing local & remote SSH inspection and injection loops."""
+class MultiSessionDaemon:
+    """Core daemon managing multi-session concurrent inspection, state machines, and silent injection."""
 
     def __init__(self):
         self.lock = threading.RLock()
-        self.node_type = "local"  # "local" or "ssh:seetacloud-westc"
-        self.remote_host = "seetacloud-westc"
-        self.is_running = False
-        self.state_name = "STOPPED"  # STOPPED, IDLE, BUSY, STABILIZING, TRIGGERING, COMPLETED
-        self.target_conv_id = ""
-        self.is_locked = False
-        self.prompt_text = "继续"
-        self.cooldown_seconds = 3.0
-        self.max_turns = 9999
-        self.sent_count = 0
-        self.current_step = 0
-        self.last_snippet = ""
-        self.cooldown_remaining = 0.0
-        self.idle_start_time = None
-        self.last_handled_step = -1
+        self.node_type = "local"  # Active node tab for browsing
+        self.is_running = True    # Global fleet engine switch
+        self.sessions: Dict[str, Dict[str, Any]] = {}
+        self.cached_convs: Dict[str, List[Dict[str, Any]]] = {}
+        self.last_convs_time: Dict[str, float] = {}
+        self.logs = deque(maxlen=300)
+        self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=6)
         self.worker_thread: Optional[threading.Thread] = None
-        self.logs = deque(maxlen=250)
 
-        self.cached_convs: List[Dict[str, Any]] = []
-        self.last_convs_time = 0.0
-
-        # Load initial config if present
+        # Load initial config and registered sessions
         self.load_config()
 
         # Start SSH keepalive background thread
         self._start_ssh_keepalive()
 
-    def add_log(self, text: str, level: str = "INFO"):
+        # Start main concurrent worker thread
+        self._start_worker()
+
+    def add_log(self, text: str, level: str = "INFO", session_tag: str = ""):
         ts = time.strftime("%H:%M:%S")
+        full_text = f"[{session_tag}] {text}" if session_tag else text
         entry = {
             "timestamp": ts,
             "level": level,
-            "text": text
+            "text": full_text
         }
         with self.lock:
             self.logs.append(entry)
-        print(f"[{ts}] [{level}] {text}")
+        print(f"[{ts}] [{level}] {full_text}", flush=True)
 
     def _start_ssh_keepalive(self):
         def keepalive_worker():
             while True:
-                time.sleep(25)
-                with self.lock:
-                    nt = self.node_type
-                if nt.startswith("ssh:"):
-                    host = nt.split("ssh:")[1]
-                    try:
-                        run_ssh(host, "true", timeout=5.0)
-                    except Exception:
-                        pass
+                time.sleep(30)
+                try:
+                    with self.lock:
+                        has_ssh = any(s.get("node_type", "").startswith("ssh:") for s in self.sessions.values()) or self.node_type.startswith("ssh:")
+                    if has_ssh:
+                        run_ssh("seetacloud-westc", "true", timeout=4.0)
+                except Exception:
+                    pass
         t = threading.Thread(target=keepalive_worker, daemon=True)
         t.start()
+
+    def _start_worker(self):
+        self.worker_thread = threading.Thread(target=self._worker_loop, daemon=True)
+        self.worker_thread.start()
 
     def load_config(self):
         if os.path.exists(CONFIG_PATH):
@@ -141,69 +138,222 @@ class AutoPilotDaemon:
                 with open(CONFIG_PATH, "r", encoding="utf-8") as f:
                     cfg = json.load(f)
                     self.node_type = cfg.get("node_type", "local")
-                    self.target_conv_id = cfg.get("target_conversation_id", "").strip()
-                    self.cooldown_seconds = float(cfg.get("idle_delay_seconds", 3))
-                    self.max_turns = int(cfg.get("max_turns", 9999))
-                    self.prompt_text = cfg.get("continue_prompt", "继续")
-                    self.is_locked = bool(self.target_conv_id)
+                    
+                    monitored = cfg.get("monitored_sessions", [])
+                    # Backward compatibility for single target_conversation_id
+                    if not monitored and cfg.get("target_conversation_id"):
+                        monitored = [{
+                            "id": cfg.get("target_conversation_id"),
+                            "node_type": cfg.get("node_type", "local"),
+                            "title": "默认迁移会话",
+                            "prompt": cfg.get("continue_prompt", "继续"),
+                            "cooldown": float(cfg.get("idle_delay_seconds", 3.0)),
+                            "max_turns": int(cfg.get("max_turns", 9999)),
+                            "enabled": True
+                        }]
+
+                    for s in monitored:
+                        cid = s.get("id", "").strip()
+                        if not cid:
+                            continue
+                        self.sessions[cid] = {
+                            "id": cid,
+                            "node_type": s.get("node_type", "local"),
+                            "title": s.get("title", cid[:12]),
+                            "prompt": s.get("prompt", "继续"),
+                            "cooldown": float(s.get("cooldown", 3.0)),
+                            "max_turns": int(s.get("max_turns", 9999)),
+                            "enabled": bool(s.get("enabled", True)),
+                            "state": "IDLE" if s.get("enabled", True) else "STOPPED",
+                            "current_step": 0,
+                            "last_handled_step": -1,
+                            "sent_count": 0,
+                            "cooldown_remaining": 0.0,
+                            "idle_start_time": None,
+                            "last_snippet": "",
+                            "error": "",
+                            "updated_at": time.time()
+                        }
             except Exception as e:
                 self.add_log(f"加载 config.json 失败: {e}", "WARN")
 
-        # Fallback to latest conversation if empty
-        if not self.target_conv_id:
-            recent = self.scan_conversations(limit=1, force=True)
-            if recent:
-                self.target_conv_id = recent[0]["id"]
+        # If still empty, scan local and register latest session as default
+        if not self.sessions:
+            convs = self.scan_conversations(node="local", limit=1, force=True)
+            if convs:
+                c = convs[0]
+                self.add_session(
+                    conv_id=c["id"],
+                    node_type="local",
+                    title=c["preview"][:30],
+                    prompt="继续",
+                    cooldown=3.0,
+                    max_turns=9999,
+                    enabled=True
+                )
 
-    def save_config(self, cfg_data: Dict[str, Any]):
+    def save_config(self):
         try:
-            current = {}
-            if os.path.exists(CONFIG_PATH):
-                with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-                    current = json.load(f)
-            current.update(cfg_data)
+            with self.lock:
+                sess_list = []
+                for s in self.sessions.values():
+                    sess_list.append({
+                        "id": s["id"],
+                        "node_type": s["node_type"],
+                        "title": s["title"],
+                        "prompt": s["prompt"],
+                        "cooldown": s["cooldown"],
+                        "max_turns": s["max_turns"],
+                        "enabled": s["enabled"]
+                    })
+                data = {
+                    "node_type": self.node_type,
+                    "monitored_sessions": sess_list,
+                    "target_conversation_id": sess_list[0]["id"] if sess_list else "",
+                    "continue_prompt": sess_list[0]["prompt"] if sess_list else "继续",
+                    "idle_delay_seconds": sess_list[0]["cooldown"] if sess_list else 3.0,
+                    "max_turns": sess_list[0]["max_turns"] if sess_list else 9999
+                }
             with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-                json.dump(current, f, ensure_ascii=False, indent=2)
-            self.add_log("配置已更新并持久化至 config.json", "SUCCESS")
+                json.dump(data, f, ensure_ascii=False, indent=2)
         except Exception as e:
-            self.add_log(f"保存 config.json 失败: {e}", "ERROR")
+            self.add_log(f"持久化 config.json 失败: {e}", "ERROR")
+
+    def add_session(self, conv_id: str, node_type: str = "local", title: str = "",
+                    prompt: str = "继续", cooldown: float = 3.0, max_turns: int = 9999,
+                    enabled: bool = True) -> bool:
+        conv_id = conv_id.strip()
+        if not conv_id:
+            return False
+
+        if not title:
+            # Try to resolve title from cached conversations
+            with self.lock:
+                cached = self.cached_convs.get(node_type, [])
+            found = next((c for c in cached if c["id"] == conv_id), None)
+            if found:
+                title = found.get("preview", "")[:40]
+            else:
+                title = f"{node_type[:5]}·{conv_id[:8]}"
+
+        with self.lock:
+            is_new = conv_id not in self.sessions
+            self.sessions[conv_id] = {
+                "id": conv_id,
+                "node_type": node_type,
+                "title": title,
+                "prompt": prompt or "继续",
+                "cooldown": max(1.0, float(cooldown)),
+                "max_turns": int(max_turns),
+                "enabled": enabled,
+                "state": "IDLE" if enabled else "STOPPED",
+                "current_step": 0,
+                "last_handled_step": -1,
+                "sent_count": 0,
+                "cooldown_remaining": 0.0,
+                "idle_start_time": None,
+                "last_snippet": "",
+                "error": "",
+                "updated_at": time.time()
+            }
+
+        self.save_config()
+        action_desc = "新增并纳管" if is_new else "更新配置"
+        self.add_log(f"{action_desc}会话 [{title}] (节点: {node_type})", "SUCCESS")
+        return True
+
+    def remove_session(self, conv_id: str) -> bool:
+        conv_id = conv_id.strip()
+        with self.lock:
+            s = self.sessions.pop(conv_id, None)
+        if s:
+            self.save_config()
+            self.add_log(f"已移出会话 [{s.get('title', conv_id[:8])}]", "INFO")
+            return True
+        return False
+
+    def toggle_session(self, conv_id: str, enabled: Optional[bool] = None) -> bool:
+        conv_id = conv_id.strip()
+        with self.lock:
+            s = self.sessions.get(conv_id)
+            if not s:
+                return False
+            new_val = (not s["enabled"]) if enabled is None else bool(enabled)
+            s["enabled"] = new_val
+            s["state"] = "IDLE" if new_val else "STOPPED"
+            s["cooldown_remaining"] = 0.0
+            s["idle_start_time"] = None
+            title = s.get("title", conv_id[:8])
+
+        self.save_config()
+        status_txt = "开启自驱" if new_val else "暂停自驱"
+        self.add_log(f"会话 [{title}] {status_txt}", "SUCCESS" if new_val else "INFO")
+        return True
+
+    def update_session(self, conv_id: str, data: Dict[str, Any]) -> bool:
+        conv_id = conv_id.strip()
+        with self.lock:
+            s = self.sessions.get(conv_id)
+            if not s:
+                return False
+            if "prompt" in data: s["prompt"] = str(data["prompt"]).strip() or "继续"
+            if "cooldown" in data: s["cooldown"] = max(1.0, float(data["cooldown"]))
+            if "max_turns" in data: s["max_turns"] = int(data["max_turns"])
+            if "title" in data: s["title"] = str(data["title"]).strip()
+        self.save_config()
+        self.add_log(f"会话 [{conv_id[:8]}] 参数已更新", "SUCCESS")
+        return True
+
+    def start_all(self):
+        with self.lock:
+            self.is_running = True
+            for s in self.sessions.values():
+                s["enabled"] = True
+                if s["state"] == "STOPPED":
+                    s["state"] = "IDLE"
+        self.save_config()
+        self.add_log("🚀 已一键启动全矩阵自驱巡航！", "SUCCESS")
+
+    def stop_all(self):
+        with self.lock:
+            for s in self.sessions.values():
+                s["enabled"] = False
+                s["state"] = "STOPPED"
+                s["cooldown_remaining"] = 0.0
+                s["idle_start_time"] = None
+        self.save_config()
+        self.add_log("⏹ 已全部暂停自驱巡航守护。", "INFO")
+
+    def trigger_session(self, conv_id: str, text: Optional[str] = None) -> bool:
+        with self.lock:
+            s = self.sessions.get(conv_id)
+            if not s:
+                return False
+            node = s["node_type"]
+            prompt = text or s["prompt"]
+            title = s.get("title", conv_id[:8])
+
+        self.add_log(f"手动单次注入指令 -> \"{prompt}\"", "INFO", session_tag=title[:10])
+        ok = self.send_message(node, conv_id, prompt)
+        if ok:
+            with self.lock:
+                if conv_id in self.sessions:
+                    self.sessions[conv_id]["sent_count"] += 1
+        return ok
 
     def set_node(self, node_type: str):
         with self.lock:
-            old_node = self.node_type
             self.node_type = node_type
-            self.cached_convs = []
-            self.last_convs_time = 0.0
-            if old_node != node_type:
-                self.target_conv_id = ""
-                self.idle_start_time = None
-                self.last_handled_step = -1
-                self.sent_count = 0
-                self.current_step = 0
-                self.last_snippet = ""
-                if self.is_running:
-                    self.is_running = False
-                    self.state_name = "STOPPED"
+        self.add_log(f"控制台浏览视图切换至 -> {node_type}", "INFO")
+        self.save_config()
 
-        self.add_log(f"已切换工作节点 -> {node_type}", "INFO")
-        convs = self.scan_conversations(limit=1, force=True)
-        if convs:
-            with self.lock:
-                self.target_conv_id = convs[0]["id"]
-            self.add_log(f"已自动对准该节点最新活跃会话: [{self.target_conv_id[:8]}...]", "SUCCESS")
-        self.save_config({"node_type": node_type, "target_conversation_id": self.target_conv_id})
-
-    def scan_conversations(self, limit: int = 50, force: bool = False) -> List[Dict[str, Any]]:
+    def scan_conversations(self, node: str, limit: int = 50, force: bool = False) -> List[Dict[str, Any]]:
         with self.lock:
-            node = self.node_type
-            target_id = self.target_conv_id
-            cached = list(self.cached_convs)
-            last_t = self.last_convs_time
+            cached = list(self.cached_convs.get(node, []))
+            last_t = self.last_convs_time.get(node, 0.0)
 
         now = time.time()
         if not force and (now - last_t < 15.0) and cached:
-            for c in cached:
-                c["is_current"] = (c["id"] == target_id)
             return cached
 
         # 1. 远程 SSH 扫描
@@ -216,11 +366,9 @@ class AutoPilotDaemon:
                         line = line.strip()
                         if line.startswith("[") and line.endswith("]"):
                             data = json.loads(line)
-                            for c in data:
-                                c["is_current"] = (c["id"] == target_id)
                             with self.lock:
-                                self.cached_convs = data
-                                self.last_convs_time = now
+                                self.cached_convs[node] = data
+                                self.last_convs_time[node] = now
                             return data
             except Exception as e:
                 self.add_log(f"远程节点 [{host}] 扫描会话失败: {e}", "WARN")
@@ -231,29 +379,31 @@ class AutoPilotDaemon:
             return []
 
         convs = []
-        for entry in os.listdir(BRAIN_DIR):
-            p = os.path.join(BRAIN_DIR, entry, ".system_generated", "logs", "transcript.jsonl")
-            if os.path.exists(p):
-                mtime = os.path.getmtime(p)
-                step_count = self._count_steps(p)
-                is_empty = (step_count == 0)
-                preview = self._extract_preview(p, is_empty)
-                convs.append({
-                    "id": entry,
-                    "mtime": mtime,
-                    "mtime_str": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(mtime)),
-                    "preview": preview,
-                    "step_count": step_count,
-                    "is_empty": is_empty,
-                    "is_remote": False,
-                    "is_current": (entry == target_id)
-                })
+        try:
+            for entry in os.listdir(BRAIN_DIR):
+                p = os.path.join(BRAIN_DIR, entry, ".system_generated", "logs", "transcript.jsonl")
+                if os.path.exists(p):
+                    mtime = os.path.getmtime(p)
+                    step_count = self._count_steps(p)
+                    is_empty = (step_count == 0)
+                    preview = self._extract_preview(p, is_empty)
+                    convs.append({
+                        "id": entry,
+                        "mtime": mtime,
+                        "mtime_str": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(mtime)),
+                        "preview": preview,
+                        "step_count": step_count,
+                        "is_empty": is_empty,
+                        "is_remote": False
+                    })
+        except Exception:
+            pass
 
         convs.sort(key=lambda x: x["mtime"], reverse=True)
         res_list = convs[:limit]
         with self.lock:
-            self.cached_convs = res_list
-            self.last_convs_time = now
+            self.cached_convs[node] = res_list
+            self.last_convs_time[node] = now
         return res_list
 
     def _extract_preview(self, transcript_file: str, is_empty: bool = False) -> str:
@@ -268,7 +418,6 @@ class AutoPilotDaemon:
                     item = json.loads(line)
                     if item.get("type") == "USER_INPUT" and item.get("content"):
                         content = str(item.get("content")).strip()
-                        # Clean xml-like tags if present
                         if "<USER_REQUEST>" in content:
                             content = content.split("<USER_REQUEST>")[1].split("</USER_REQUEST>")[0].strip()
                         content = content.replace("\n", " ")
@@ -280,15 +429,11 @@ class AutoPilotDaemon:
     def _count_steps(self, transcript_file: str) -> int:
         try:
             with open(transcript_file, "r", encoding="utf-8", errors="ignore") as f:
-                lines = [l for l in f if l.strip()]
-                return len(lines)
+                return sum(1 for line in f if line.strip())
         except Exception:
             return 0
 
-    def send_message(self, conv_id: str, text: str) -> bool:
-        with self.lock:
-            node = self.node_type
-
+    def send_message(self, node: str, conv_id: str, text: str) -> bool:
         # 1. 远程 SSH 注入
         if node.startswith("ssh:"):
             host = node.split("ssh:")[1]
@@ -296,14 +441,14 @@ class AutoPilotDaemon:
                 cmd_str = f"/root/.gemini/antigravity-ide/bin/agentapi_auto.sh send-message {conv_id} {json.dumps(text)}"
                 res = run_ssh(host, cmd_str, timeout=12.0)
                 if res.returncode == 0:
-                    self.add_log(f"成功向远程 [{host} / {conv_id[:8]}...] 注入指令: \"{text}\"", "TRIGGER")
+                    self.add_log(f"远程注入成功: \"{text}\"", "TRIGGER", session_tag=f"{host}/{conv_id[:8]}")
                     return True
                 else:
                     err_msg = res.stderr.strip() or res.stdout.strip()
-                    self.add_log(f"远程注入失败 ({host}): {err_msg}", "ERROR")
+                    self.add_log(f"远程注入失败: {err_msg}", "ERROR", session_tag=conv_id[:8])
                     return False
             except Exception as e:
-                self.add_log(f"远程注入异常: {e}", "ERROR")
+                self.add_log(f"远程注入异常: {e}", "ERROR", session_tag=conv_id[:8])
                 return False
 
         # 2. 本地注入
@@ -313,7 +458,7 @@ class AutoPilotDaemon:
         elif os.path.exists(AGENTAPI_BAT):
             cmd = [AGENTAPI_BAT, "send-message", conv_id, text]
         else:
-            self.add_log("未找到 Language Server agentapi 执行接口", "ERROR")
+            self.add_log("未找到 Language Server agentapi 执行接口", "ERROR", session_tag=conv_id[:8])
             return False
 
         try:
@@ -333,157 +478,16 @@ class AutoPilotDaemon:
                 timeout=10
             )
             if res.returncode == 0:
-                self.add_log(f"成功向本地会话 [{conv_id[:8]}...] 注入指令: \"{text}\"", "TRIGGER")
+                self.add_log(f"本地注入成功: \"{text}\"", "TRIGGER", session_tag=f"本地/{conv_id[:8]}")
                 return True
             else:
-                self.add_log(f"本地注入失败 (Code {res.returncode}): {res.stderr.strip()}", "ERROR")
+                self.add_log(f"本地注入失败 (Code {res.returncode}): {res.stderr.strip()}", "ERROR", session_tag=conv_id[:8])
                 return False
         except Exception as e:
-            self.add_log(f"本地执行进程异常: {e}", "ERROR")
+            self.add_log(f"本地注入进程异常: {e}", "ERROR", session_tag=conv_id[:8])
             return False
 
-    def trigger_once(self, conv_id: Optional[str] = None, text: Optional[str] = None) -> bool:
-        with self.lock:
-            target = conv_id or self.target_conv_id
-            content = text or self.prompt_text
-        if not target:
-            self.add_log("未能触发：目标会话 ID 为空", "WARN")
-            return False
-        self.add_log(f"手动单次触发指令 -> [{target[:8]}...]", "INFO")
-        ok = self.send_message(target, content)
-        if ok:
-            with self.lock:
-                self.sent_count += 1
-        return ok
-
-    def start(self, conv_id: str, prompt: str, cooldown: float, max_turns: int, is_locked: bool) -> bool:
-        with self.lock:
-            if self.is_running:
-                already_running = True
-            else:
-                already_running = False
-                self.target_conv_id = conv_id or self.target_conv_id
-                self.prompt_text = prompt or self.prompt_text
-                self.cooldown_seconds = max(1.0, float(cooldown))
-                self.max_turns = int(max_turns)
-                self.is_locked = bool(is_locked)
-                self.is_running = True
-                self.state_name = "IDLE"
-                self.idle_start_time = None
-                self.last_handled_step = -1
-
-                target_cid = self.target_conv_id
-                p_text = self.prompt_text
-                cd = self.cooldown_seconds
-                mt = self.max_turns
-                nt = self.node_type
-
-        if already_running:
-            self.add_log("守护进程已经在运行中", "WARN")
-            return False
-
-        # Save config and log outside lock to prevent any lock contention
-        self.save_config({
-            "node_type": nt,
-            "target_conversation_id": target_cid,
-            "continue_prompt": p_text,
-            "idle_delay_seconds": cd,
-            "max_turns": mt
-        })
-
-        node_label = f"远程 {nt}" if nt.startswith("ssh:") else "本地"
-        self.add_log(f"🚀 自驱巡航已启动！节点: {node_label} · 目标会话: {target_cid[:12]}... (冷却: {cd}s)", "SUCCESS")
-
-        with self.lock:
-            self.worker_thread = threading.Thread(target=self._worker_loop, daemon=True)
-            self.worker_thread.start()
-        return True
-
-    def stop(self) -> bool:
-        was_running = False
-        with self.lock:
-            if self.is_running:
-                was_running = True
-                self.is_running = False
-                self.state_name = "STOPPED"
-                self.cooldown_remaining = 0.0
-
-        if was_running:
-            self.add_log("⏹ 自驱巡航守护进程已手动停止。", "INFO")
-        return was_running
-
-    def _worker_loop(self):
-        while True:
-            with self.lock:
-                if not self.is_running:
-                    break
-                cid = self.target_conv_id
-                locked = self.is_locked
-                cooldown = self.cooldown_seconds
-                max_t = self.max_turns
-                p_text = self.prompt_text
-                node = self.node_type
-
-            # Check step info
-            step_idx, finished, is_completed, snippet = self._get_step_info(cid)
-            now = time.time()
-
-            with self.lock:
-                self.current_step = step_idx
-                self.last_snippet = snippet
-
-            if is_completed:
-                self.add_log(f"🎉 达成任务完工声明: '{snippet}'", "SUCCESS")
-                self.add_log("已达成完工条件，自驱守护程序安全停止。", "SUCCESS")
-                with self.lock:
-                    self.is_running = False
-                    self.state_name = "COMPLETED"
-                break
-
-            if finished and step_idx != self.last_handled_step:
-                if self.idle_start_time is None:
-                    self.idle_start_time = now
-                    with self.lock:
-                        self.state_name = "STABILIZING"
-
-                elapsed = now - self.idle_start_time
-                remain = max(0.0, cooldown - elapsed)
-                with self.lock:
-                    self.cooldown_remaining = round(remain, 1)
-
-                if elapsed >= cooldown:
-                    with self.lock:
-                        self.state_name = "TRIGGERING"
-                        self.sent_count += 1
-                        current_count = self.sent_count
-                        self.last_handled_step = step_idx
-                        self.idle_start_time = None
-                        self.cooldown_remaining = 0.0
-
-                    node_tag = f"[{node}] " if node.startswith("ssh:") else ""
-                    self.add_log(f"{node_tag}检测到第 {step_idx} 步完成，自动注入第 {current_count} 轮: \"{p_text}\"", "TRIGGER")
-                    self.send_message(cid, p_text)
-
-                    if current_count >= max_t:
-                        self.add_log(f"已达到预设最大轮数 ({max_t})，自驱程序安全退出。", "SUCCESS")
-                        with self.lock:
-                            self.is_running = False
-                            self.state_name = "STOPPED"
-                        break
-            else:
-                with self.lock:
-                    self.idle_start_time = None
-                    self.cooldown_remaining = 0.0
-                    self.state_name = "BUSY" if not finished else "IDLE"
-
-            # Polling delay: 2.0s for remote SSH, 0.8s for local
-            delay = 2.0 if node.startswith("ssh:") else 0.8
-            time.sleep(delay)
-
-    def _get_step_info(self, conv_id: str):
-        with self.lock:
-            node = self.node_type
-
+    def _get_step_info(self, node: str, conv_id: str):
         # 1. 远程 SSH 检查
         if node.startswith("ssh:"):
             host = node.split("ssh:")[1]
@@ -500,8 +504,10 @@ class AutoPilotDaemon:
                             content_lower = snippet.lower()
                             is_completed = finished and any(k in content_lower for k in COMPLETION_KEYWORDS)
                             return step_idx, finished, is_completed, snippet
+                else:
+                    return -1, False, False, f"远程离线/拒绝连接: {res.stderr.strip()[:40]}"
             except Exception as e:
-                return -1, False, False, f"远程检测失败: {e}"
+                return -1, False, False, f"检测异常: {e}"
             return -1, False, False, ""
 
         # 2. 本地检查
@@ -529,33 +535,147 @@ class AutoPilotDaemon:
         except Exception:
             return -1, False, False, ""
 
+    def _worker_loop(self):
+        """High-performance concurrent loop servicing all active sessions."""
+        while True:
+            try:
+                with self.lock:
+                    if not self.is_running:
+                        active_sessions = []
+                    else:
+                        active_sessions = [dict(s) for s in self.sessions.values() if s.get("enabled")]
+
+                if not active_sessions:
+                    time.sleep(1.0)
+                    continue
+
+                now = time.time()
+
+                # Process all active sessions concurrently using thread pool
+                futures = {
+                    self.executor.submit(self._get_step_info, s["node_type"], s["id"]): s
+                    for s in active_sessions
+                }
+
+                for future in concurrent.futures.as_completed(futures, timeout=10.0):
+                    s = futures[future]
+                    cid = s["id"]
+                    try:
+                        step_idx, finished, is_completed, snippet = future.result()
+                    except Exception as e:
+                        step_idx, finished, is_completed, snippet = -1, False, False, str(e)
+
+                    # State machine transition for this session
+                    with self.lock:
+                        curr = self.sessions.get(cid)
+                        if not curr or not curr.get("enabled"):
+                            continue
+
+                        curr["current_step"] = step_idx
+                        curr["last_snippet"] = snippet
+                        curr["updated_at"] = now
+
+                        # 1. 任务完成判定
+                        if is_completed:
+                            curr["state"] = "COMPLETED"
+                            curr["enabled"] = False
+                            self.add_log(f"🎉 达成任务完工声明: '{snippet}'", "SUCCESS", session_tag=curr["title"][:10])
+                            continue
+
+                        # 2. 步骤完结判定与消抖
+                        if finished and step_idx != curr["last_handled_step"]:
+                            if curr["idle_start_time"] is None:
+                                curr["idle_start_time"] = now
+                                curr["state"] = "STABILIZING"
+
+                            elapsed = now - curr["idle_start_time"]
+                            remain = max(0.0, curr["cooldown"] - elapsed)
+                            curr["cooldown_remaining"] = round(remain, 1)
+
+                            if elapsed >= curr["cooldown"]:
+                                curr["state"] = "TRIGGERING"
+                                curr["sent_count"] += 1
+                                current_count = curr["sent_count"]
+                                curr["last_handled_step"] = step_idx
+                                curr["idle_start_time"] = None
+                                curr["cooldown_remaining"] = 0.0
+                                p_text = curr["prompt"]
+                                node = curr["node_type"]
+                                title = curr["title"]
+                                max_t = curr["max_turns"]
+
+                                # Trigger outside lock
+                                threading.Thread(
+                                    target=self._async_inject,
+                                    args=(node, cid, p_text, current_count, step_idx, title, max_t),
+                                    daemon=True
+                                ).start()
+                        else:
+                            curr["idle_start_time"] = None
+                            curr["cooldown_remaining"] = 0.0
+                            if step_idx == -1 and "拒绝连接" in snippet:
+                                curr["state"] = "OFFLINE"
+                            else:
+                                curr["state"] = "BUSY" if not finished else "IDLE"
+
+            except Exception as e:
+                print(f"[Worker Error] {e}", flush=True)
+
+            time.sleep(1.2)
+
+    def _async_inject(self, node: str, cid: str, p_text: str, current_count: int,
+                      step_idx: int, title: str, max_t: int):
+        self.add_log(f"检测到第 {step_idx} 步完成，自动注入第 {current_count} 轮: \"{p_text}\"", "TRIGGER", session_tag=title[:10])
+        self.send_message(node, cid, p_text)
+
+        if current_count >= max_t:
+            with self.lock:
+                if cid in self.sessions:
+                    self.sessions[cid]["enabled"] = False
+                    self.sessions[cid]["state"] = "STOPPED"
+            self.add_log(f"已达到最大轮数 ({max_t})，会话自驱完成并安全退出。", "SUCCESS", session_tag=title[:10])
+            self.save_config()
+
     def get_status_payload(self) -> Dict[str, Any]:
         with self.lock:
             lsp_exists = os.path.exists(LS_EXE) or os.path.exists(AGENTAPI_BAT)
-            is_remote = self.node_type.startswith("ssh:")
+            sess_list = list(self.sessions.values())
+            running_sessions = [s for s in sess_list if s.get("enabled")]
+            busy_sessions = [s for s in sess_list if s.get("state") == "BUSY"]
+            stabilizing_sessions = [s for s in sess_list if s.get("state") == "STABILIZING"]
+            total_sent = sum(s.get("sent_count", 0) for s in sess_list)
+
+            # Fallback legacy fields for single-session backward compatibility
+            primary = running_sessions[0] if running_sessions else (sess_list[0] if sess_list else {})
+
             return {
-                "running": self.is_running,
-                "state": self.state_name,
+                "running": len(running_sessions) > 0,
+                "fleet_running": len(running_sessions) > 0,
+                "active_count": len(running_sessions),
+                "total_count": len(sess_list),
+                "busy_count": len(busy_sessions),
+                "stabilizing_count": len(stabilizing_sessions),
+                "total_sent_count": total_sent,
+                "sessions": sess_list,
                 "node_type": self.node_type,
-                "is_remote": is_remote,
-                "remote_host": self.node_type.split("ssh:")[1] if is_remote else "",
-                "target_conv_id": self.target_conv_id,
-                "is_locked": self.is_locked,
-                "prompt_text": self.prompt_text,
-                "cooldown_seconds": self.cooldown_seconds,
-                "max_turns": self.max_turns,
-                "sent_count": self.sent_count,
-                "current_step": self.current_step,
-                "last_snippet": self.last_snippet,
-                "cooldown_remaining": self.cooldown_remaining,
-                "lsp_ok": True if is_remote else lsp_exists,
-                "lsp_path": (f"SSH AgentAPI ({self.node_type})" if is_remote else (LS_EXE if os.path.exists(LS_EXE) else AGENTAPI_BAT)),
-                "pid": os.getpid()
+                "lsp_ok": lsp_exists or any(s.get("node_type", "").startswith("ssh:") for s in sess_list),
+                "lsp_path": LS_EXE if os.path.exists(LS_EXE) else AGENTAPI_BAT,
+                "pid": os.getpid(),
+
+                # Legacy compatibility
+                "state": primary.get("state", "STOPPED"),
+                "target_conv_id": primary.get("id", ""),
+                "prompt_text": primary.get("prompt", "继续"),
+                "cooldown_seconds": primary.get("cooldown", 3.0),
+                "cooldown_remaining": primary.get("cooldown_remaining", 0.0),
+                "sent_count": primary.get("sent_count", 0),
+                "current_step": primary.get("current_step", 0),
+                "last_snippet": primary.get("last_snippet", "")
             }
 
 
 # Singleton daemon instance
-daemon = AutoPilotDaemon()
+daemon = MultiSessionDaemon()
 
 
 class AutoPilotHTTPHandler(SimpleHTTPRequestHandler):
@@ -565,7 +685,6 @@ class AutoPilotHTTPHandler(SimpleHTTPRequestHandler):
         super().__init__(*args, directory=WEB_DIR, **kwargs)
 
     def log_message(self, format, *args):
-        # Silence routine static request logging in terminal
         pass
 
     def send_json(self, data: Any, status: int = 200):
@@ -592,15 +711,17 @@ class AutoPilotHTTPHandler(SimpleHTTPRequestHandler):
         if path == "/api/status":
             self.send_json(daemon.get_status_payload())
         elif path == "/api/conversations":
+            node = daemon.node_type
+            if "node=" in self.path:
+                node = self.path.split("node=")[1].split("&")[0]
             force = ("force=1" in self.path)
-            convs = daemon.scan_conversations(limit=40, force=force)
+            convs = daemon.scan_conversations(node=node, limit=40, force=force)
             self.send_json(convs)
         elif path == "/api/logs":
             with daemon.lock:
                 logs_list = list(daemon.logs)
             self.send_json(logs_list)
         else:
-            # Fallback to static web files
             super().do_GET()
 
     def do_POST(self):
@@ -620,31 +741,79 @@ class AutoPilotHTTPHandler(SimpleHTTPRequestHandler):
                 "ok": True,
                 "node_type": daemon.node_type,
                 "status": daemon.get_status_payload(),
-                "conversations": daemon.scan_conversations(limit=40, force=True)
+                "conversations": daemon.scan_conversations(node=node, limit=40, force=True)
             })
 
-        elif path == "/api/start":
-            conv_id = body.get("conv_id", "").strip()
+        # Multi-Session Fleet Endpoints
+        elif path == "/api/sessions/add":
+            cid = body.get("conv_id", "").strip()
+            node = body.get("node_type", daemon.node_type).strip()
+            title = body.get("title", "").strip()
             prompt = body.get("prompt", "继续").strip()
             cooldown = float(body.get("cooldown", 3.0))
             max_turns = int(body.get("max_turns", 9999))
-            is_locked = bool(body.get("is_locked", True))
+            enabled = bool(body.get("enabled", True))
+            ok = daemon.add_session(cid, node, title, prompt, cooldown, max_turns, enabled)
+            self.send_json({"ok": ok, "status": daemon.get_status_payload()})
 
-            ok = daemon.start(conv_id, prompt, cooldown, max_turns, is_locked)
-            self.send_json({"ok": ok, "message": "自驱程序已启动" if ok else "自驱程序已在运行中", "status": daemon.get_status_payload()})
+        elif path == "/api/sessions/remove":
+            cid = body.get("conv_id", "").strip()
+            ok = daemon.remove_session(cid)
+            self.send_json({"ok": ok, "status": daemon.get_status_payload()})
+
+        elif path == "/api/sessions/toggle":
+            cid = body.get("conv_id", "").strip()
+            enabled = body.get("enabled", None)
+            ok = daemon.toggle_session(cid, enabled)
+            self.send_json({"ok": ok, "status": daemon.get_status_payload()})
+
+        elif path == "/api/sessions/update":
+            cid = body.get("conv_id", "").strip()
+            ok = daemon.update_session(cid, body)
+            self.send_json({"ok": ok, "status": daemon.get_status_payload()})
+
+        elif path == "/api/sessions/trigger_once":
+            cid = body.get("conv_id", "").strip()
+            text = body.get("text", None)
+            ok = daemon.trigger_session(cid, text)
+            self.send_json({"ok": ok, "status": daemon.get_status_payload()})
+
+        elif path == "/api/sessions/start_all":
+            daemon.start_all()
+            self.send_json({"ok": True, "status": daemon.get_status_payload()})
+
+        elif path == "/api/sessions/stop_all":
+            daemon.stop_all()
+            self.send_json({"ok": True, "status": daemon.get_status_payload()})
+
+        # Legacy Compatibility Endpoints
+        elif path == "/api/start":
+            cid = body.get("conv_id", "").strip()
+            node = body.get("node_type", daemon.node_type).strip()
+            prompt = body.get("prompt", "继续").strip()
+            cooldown = float(body.get("cooldown", 3.0))
+            max_turns = int(body.get("max_turns", 9999))
+            if cid:
+                daemon.add_session(cid, node, "", prompt, cooldown, max_turns, enabled=True)
+            daemon.start_all()
+            self.send_json({"ok": True, "message": "全矩阵自驱巡航已启动", "status": daemon.get_status_payload()})
 
         elif path == "/api/stop":
-            ok = daemon.stop()
-            self.send_json({"ok": True, "message": "自驱程序已停止", "status": daemon.get_status_payload()})
+            daemon.stop_all()
+            self.send_json({"ok": True, "message": "自驱巡航已停止", "status": daemon.get_status_payload()})
 
         elif path == "/api/trigger_once":
-            conv_id = body.get("conv_id", "")
+            cid = body.get("conv_id", "").strip()
             text = body.get("text", "")
-            ok = daemon.trigger_once(conv_id, text)
+            if not cid:
+                with daemon.lock:
+                    if daemon.sessions:
+                        cid = list(daemon.sessions.keys())[0]
+            ok = daemon.trigger_session(cid, text) if cid else False
             self.send_json({"ok": ok, "message": "已发送单次注入" if ok else "发送失败"})
 
         elif path == "/api/save_config":
-            daemon.save_config(body)
+            daemon.save_config()
             self.send_json({"ok": True, "message": "配置已保存"})
 
         elif path == "/api/clear_logs":
@@ -656,7 +825,7 @@ class AutoPilotHTTPHandler(SimpleHTTPRequestHandler):
             self.send_json({"ok": True, "message": "服务正在重启中..."})
             def restart_worker():
                 time.sleep(0.5)
-                daemon.stop()
+                daemon.stop_all()
                 python_exe = sys.executable
                 script_path = os.path.abspath(__file__)
                 if os.name == 'nt':
@@ -681,7 +850,6 @@ class DualStackHTTPServer(ThreadingHTTPServer):
 
 
 def make_http_server(port: int):
-    # Try IPv6 dual-stack (accepts [::1] and 127.0.0.1 seamlessly on Windows)
     try:
         class IPv6DualStack(DualStackHTTPServer):
             address_family = socket.AF_INET6
@@ -695,13 +863,12 @@ def main():
         os.makedirs(WEB_DIR, exist_ok=True)
 
     server = make_http_server(PORT)
-    daemon.add_log(f"Web 控制中心已就绪: http://localhost:{PORT}", "SUCCESS")
-    print("=" * 65)
-    print("   ⚡ Antigravity Auto-Pilot UI 控制中心 (Dual-Node Local/SSH)")
-    print("=" * 65)
+    daemon.add_log(f"⚡ 多会话并发控制中心已就绪: http://localhost:{PORT}", "SUCCESS")
+    print("=" * 68)
+    print("   ⚡ Antigravity Auto-Pilot 多会话并发巡航控制中心 (Fleet Engine)")
+    print("=" * 68)
     print(f"[*] 本地 Web 控制台 : http://localhost:{PORT}")
-    print(f"[*] 当前执行节点    : {daemon.node_type}")
-    print(f"[*] 默认监控会话    : {daemon.target_conv_id}")
+    print(f"[*] 当前纳管会话数 : {len(daemon.sessions)} 个")
     print("按 Ctrl+C 退出 Web 服务\n")
 
     try:
@@ -709,7 +876,7 @@ def main():
     except KeyboardInterrupt:
         print("\n正在停止服务...")
     finally:
-        daemon.stop()
+        daemon.stop_all()
         server.server_close()
         print("[*] 服务已退出。")
 

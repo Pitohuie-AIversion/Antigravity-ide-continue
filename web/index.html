@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>⚡ Antigravity Auto-Pilot 控制中心 ｜ 端内自动化持续开发仪表盘</title>
+  <title>⚡ Antigravity Auto-Pilot 控制中心 ｜ 多会话并发持续开发仪表盘</title>
   <link rel="stylesheet" href="style.css">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -24,7 +24,7 @@
         </div>
         <div class="brand-text">
           <div class="brand-title">ANTIGRAVITY <span>AUTO-PILOT</span></div>
-          <div class="brand-subtitle">IDE 端内自动化持续开发控制中心 · LSP 通道无感静默注入</div>
+          <div class="brand-subtitle">多会话并发巡航引擎 · 跨节点混合调度 · LSP 通道静默注入</div>
         </div>
       </div>
 
@@ -38,92 +38,112 @@
         </div>
         <div class="status-pill stopped" id="mainStatusPill">
           <span class="status-indicator"></span>
-          <span class="status-text" id="mainStatusText">已停止 STOPPED</span>
+          <span class="status-text" id="mainStatusText">0 会话运行中</span>
         </div>
       </div>
     </header>
 
     <!-- 核心指标卡片矩阵 -->
     <section class="metrics-grid">
-      <!-- 卡片1：运行状态 -->
+      <!-- 卡片1：多会话运行状态 -->
       <div class="metric-card">
         <div class="metric-header">
           <span class="metric-icon">🔄</span>
-          <span class="metric-label">当前运行状态</span>
+          <span class="metric-label">多会话巡航状态</span>
         </div>
-        <div class="metric-value status-val" id="metricState">STOPPED</div>
-        <div class="metric-foot" id="metricStateDetail">守护进程处于就绪待命状态</div>
+        <div class="metric-value status-val" id="metricFleetVal">0 / 0 <span class="unit">运行</span></div>
+        <div class="metric-foot" id="metricFleetDetail">守护进程处于就绪待命状态</div>
       </div>
 
-      <!-- 卡片2：累计注入轮数 -->
+      <!-- 卡片2：全矩阵累计注入轮数 -->
       <div class="metric-card">
         <div class="metric-header">
           <span class="metric-icon">🚀</span>
-          <span class="metric-label">累计自动注入</span>
+          <span class="metric-label">全矩阵累计注入</span>
         </div>
-        <div class="metric-value counter-val" id="metricSentCount">0 <span class="unit">轮</span></div>
-        <div class="metric-foot">零按键/零焦点抢占静默执行</div>
+        <div class="metric-value counter-val" id="metricTotalSent">0 <span class="unit">轮</span></div>
+        <div class="metric-foot">多会话独立静默并发执行</div>
       </div>
 
-      <!-- 卡片3：当前步骤 & 冷却 -->
+      <!-- 卡片3：动态步骤跟踪 -->
       <div class="metric-card">
         <div class="metric-header">
           <span class="metric-icon">⏱</span>
-          <span class="metric-label">消抖冷却倒计时</span>
+          <span class="metric-label">最新动态步骤</span>
         </div>
-        <div class="metric-value cooldown-val" id="metricCooldown">0.0 <span class="unit">s</span></div>
+        <div class="metric-value cooldown-val" id="metricStepVal">Step --</div>
         <div class="cooldown-track">
           <div class="cooldown-fill" id="cooldownBar" style="width: 0%;"></div>
         </div>
-        <div class="metric-foot" id="metricStepDetail">当前步骤: Step --</div>
+        <div class="metric-foot" id="metricStepDetail">活跃会话状态跟踪中</div>
       </div>
 
-      <!-- 卡片4：监控目标对话 -->
+      <!-- 卡片4：纳管节点分布 -->
       <div class="metric-card">
         <div class="metric-header">
-          <span class="metric-icon">🎯</span>
-          <span class="metric-label">监控目标会话</span>
+          <span class="metric-icon">🌐</span>
+          <span class="metric-label">纳管节点分布</span>
         </div>
-        <div class="metric-value conv-val" id="metricConvId">--</div>
-        <div class="metric-foot copy-foot" id="copyConvBtn" title="点击复制完整会话ID">
-          <span>📋 点击复制会话 ID</span>
+        <div class="metric-value conv-val" id="metricNodeDist" style="font-size: 20px;">0 本地 + 0 远程</div>
+        <div class="metric-foot" id="metricNodeDetail">
+          <span>跨设备多路复用与心跳保活</span>
         </div>
       </div>
     </section>
 
-    <!-- 主操作区 (Hero Controls) -->
+    <!-- 全局快捷控制区 (Global Fleet Controls) -->
     <section class="control-deck">
       <div class="action-buttons-row">
-        <button class="btn-main btn-start" id="startBtn">
+        <button class="btn-main btn-start" id="startAllBtn">
           <span class="btn-icon">▶</span>
           <div class="btn-content">
-            <span class="btn-title">启动自驱巡航</span>
-            <span class="btn-desc">自动检测对话完结并注入继续指令</span>
+            <span class="btn-title">全部启动自驱巡航</span>
+            <span class="btn-desc">并发激活下方监控池中的所有会话</span>
           </div>
         </button>
 
-        <button class="btn-main btn-stop" id="stopBtn" style="display: none;">
+        <button class="btn-main btn-stop" id="stopAllBtn">
           <span class="btn-icon">⏹</span>
           <div class="btn-content">
-            <span class="btn-title">立即中止自驱</span>
-            <span class="btn-desc">停止当前后台监听与自动注入</span>
+            <span class="btn-title">全部暂停巡航</span>
+            <span class="btn-desc">暂停所有会话的自动检测与指令注入</span>
           </div>
         </button>
 
-        <button class="btn-secondary btn-trigger" id="triggerOnceBtn">
+        <button class="btn-secondary btn-trigger" id="triggerAllBtn">
           <span class="btn-icon">⚡</span>
           <div class="btn-content">
-            <span class="btn-title">立即发送一次</span>
-            <span class="btn-desc">无须等待，向目标对话立即注入</span>
+            <span class="btn-title">全矩阵立即注入一次</span>
+            <span class="btn-desc">向所有活跃会话同时发送提示词</span>
           </div>
         </button>
       </div>
     </section>
 
-    <!-- 参数配置与控制中心 -->
-    <section class="config-section">
+    <!-- 🚀 多会话并发巡航矩阵看板 (Multi-Session Fleet Matrix) -->
+    <section class="fleet-section" id="fleetSection">
+      <div class="fleet-header-row">
+        <div class="fleet-title-wrap">
+          <h3>🚀 多会话并发巡航矩阵看板 (Multi-Session Fleet Matrix)</h3>
+          <span class="fleet-count-badge" id="fleetCountBadge">0 个会话运行中</span>
+        </div>
+        <div class="fleet-actions-group">
+          <button class="btn-pill-action" id="startAllFleetBtn">▶ 全部开启</button>
+          <button class="btn-pill-action" id="stopAllFleetBtn" style="color: #f43f5e; border-color: rgba(244, 63, 94, 0.3);">⏹ 全部暂停</button>
+          <a href="#enrollSection" class="btn-pill-action primary" id="enrollScrollBtn">➕ 纳管新会话</a>
+        </div>
+      </div>
+
+      <!-- 动态会话矩阵容器 -->
+      <div class="fleet-grid" id="fleetGrid">
+        <!-- 动态渲染卡片 -->
+      </div>
+    </section>
+
+    <!-- 参数配置与纳管新会话中心 -->
+    <section class="config-section" id="enrollSection">
       <div class="section-title-row">
-        <h3>⚙️ 自动化参数配置 (Configuration & Routing)</h3>
+        <h3>⚙️ 纳管新会话与自动化参数配置 (Enroll Session & Routing)</h3>
         <button class="btn-pill-action" id="refreshConvsBtn">🔄 刷新会话列表</button>
       </div>
 
@@ -132,7 +152,7 @@
         <div class="node-selector-header">
           <div class="node-selector-label">
             <span class="node-icon-title">🌐</span>
-            <span class="node-text-title">控制执行节点 (Target Execution Node)</span>
+            <span class="node-text-title">选择浏览节点 (Browsing Execution Node)</span>
           </div>
           <span class="node-badge" id="currentNodeBadge">🖥️ 本地环境 (Local)</span>
         </div>
@@ -150,7 +170,7 @@
             <span class="pill-icon">☁️</span>
             <div class="pill-info">
               <span class="pill-name">恒源云西区 (seetacloud-westc)</span>
-              <span class="pill-sub">端口 17090 · 恒源云自动心跳保活</span>
+              <span class="pill-sub">端口 17090 · 自动保活</span>
             </div>
           </button>
         </div>
@@ -160,7 +180,7 @@
         <!-- 目标会话选择 -->
         <div class="config-col">
           <label class="config-label">
-            <span>🎯 目标会话 (Target Conversation)</span>
+            <span>🎯 待纳管会话 (Select Conversation to Enroll)</span>
             <span class="config-hint" id="convCountHint">已扫描 0 个活跃对话</span>
           </label>
           <div class="select-wrapper">
@@ -177,21 +197,25 @@
               <span class="checkmark"></span>
               <span>隐藏未发消息的空白会话（仅显示有发言内容的会话）</span>
             </label>
-            <label class="custom-checkbox">
-              <input type="checkbox" id="lockConvCheckbox" checked>
-              <span class="checkmark"></span>
-              <span>锁定此目标会话（不随最新对话动态漂移）</span>
-            </label>
           </div>
+
+          <!-- 添加按钮 -->
+          <button class="btn-main btn-start" id="addSessionToFleetBtn" style="margin-top: 14px; width: 100%; padding: 12px 18px;">
+            <span class="btn-icon">➕</span>
+            <div class="btn-content">
+              <span class="btn-title">将此会话加入并发监控池</span>
+              <span class="btn-desc">启动该会话的自动化多线程巡航</span>
+            </div>
+          </button>
         </div>
 
         <!-- 注入指令与提示词设置 -->
         <div class="config-col">
           <label class="config-label">
-            <span>💬 自动注入指令 (Prompt Content)</span>
-            <span class="config-hint">每轮对话结束时注入的文字</span>
+            <span>💬 默认自动注入指令 (Prompt Content)</span>
+            <span class="config-hint">该会话每轮结束时注入的文字</span>
           </label>
-          <input type="text" class="custom-input" id="promptInput" value="继续" placeholder="例如：继续、继续推进下一步">
+          <input type="text" class="custom-input" id="promptInput" value="继续推进下一项任务" placeholder="例如：继续、继续推进下一步">
           
           <!-- 快捷提示词药丸 -->
           <div class="prompt-pills">
@@ -238,7 +262,7 @@
           <span class="terminal-dot red"></span>
           <span class="terminal-dot yellow"></span>
           <span class="terminal-dot green"></span>
-          <span class="console-name">📜 实时运行与状态审计控制台 (Live Stream Console)</span>
+          <span class="console-name">📜 实时并发审计控制台 (Live Fleet Console)</span>
         </div>
 
         <div class="console-actions">
@@ -255,7 +279,7 @@
         <div class="log-line info">
           <span class="log-ts">[00:00:00]</span>
           <span class="log-tag tag-info">[SYSTEM]</span>
-          <span class="log-msg">Antigravity Auto-Pilot 控制中心已就绪，正在连接后端守护引擎...</span>
+          <span class="log-msg">Antigravity Auto-Pilot 多会话并发控制中心已就绪，正在连接守护引擎...</span>
         </div>
       </div>
     </section>
@@ -271,7 +295,7 @@
           <span>🔍</span> 检测 Language Server 接口响应
         </button>
         <span class="footer-sep">·</span>
-        <span class="footer-copy">© 2026 Antigravity IDE Automation Suite · Pair Programming</span>
+        <span class="footer-copy">© 2026 Antigravity IDE Automation Suite · Multi-Session Fleet Engine</span>
       </div>
     </footer>
   </div>
