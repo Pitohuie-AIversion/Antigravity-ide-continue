@@ -70,6 +70,27 @@ const clearLogsBtn = document.getElementById('clearLogsBtn');
 const quickTestLspBtn = document.getElementById('quickTestLspBtn');
 const toastContainer = document.getElementById('toastContainer');
 
+// Telemetry & Webhook Elements
+const telemetrySection = document.getElementById('telemetrySection');
+const toggleTelemetryBtn = document.getElementById('toggleTelemetryBtn');
+const telemetryCanvas = document.getElementById('telemetryCanvas');
+const telemRate = document.getElementById('telemRate');
+const telemUptime = document.getElementById('telemUptime');
+const telemWebhookBadge = document.getElementById('telemWebhookBadge');
+
+const openWebhookModalBtn = document.getElementById('openWebhookModalBtn');
+const closeWebhookModalBtn = document.getElementById('closeWebhookModalBtn');
+const webhookModal = document.getElementById('webhookModal');
+const whEnabledCheckbox = document.getElementById('whEnabledCheckbox');
+const whUrlInput = document.getElementById('whUrlInput');
+const whNotifyComplete = document.getElementById('whNotifyComplete');
+const whNotifyError = document.getElementById('whNotifyError');
+const whNotifyTrigger = document.getElementById('whNotifyTrigger');
+const testWebhookBtn = document.getElementById('testWebhookBtn');
+const saveWebhookBtn = document.getElementById('saveWebhookBtn');
+const platformPills = document.querySelectorAll('.platform-pill');
+let currentWebhookPlatform = 'feishu';
+
 // ==========================================================================
 // Safe Fetch with AbortController Timeout
 // ==========================================================================
@@ -787,12 +808,294 @@ if (quickTestLspBtn) {
 }
 
 // ==========================================================================
+// 实时效能与活动图表渲染 (Live Telemetry Canvas Visualizer)
+// ==========================================================================
+function renderTelemetryCanvas(history = []) {
+  if (!telemetryCanvas) return;
+  const ctx = telemetryCanvas.getContext('2d');
+  if (!ctx) return;
+
+  const width = telemetryCanvas.width;
+  const height = telemetryCanvas.height;
+
+  // 清空画布
+  ctx.clearRect(0, 0, width, height);
+
+  // 绘制半透明水平参考网格线
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
+  ctx.lineWidth = 1;
+  ctx.setLineDash([4, 4]);
+  [0.25, 0.5, 0.75].forEach(ratio => {
+    const y = Math.round(height * ratio);
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(width, y);
+    ctx.stroke();
+  });
+  ctx.setLineDash([]);
+
+  // 提取数值点 (支持纯数值数组或 { injections_per_min, ... } 历史对象列表)
+  let rawItems = history && history.length ? [...history] : [0, 0];
+  let dataPoints = rawItems.map(item => {
+    if (typeof item === 'object' && item !== null) {
+      return Number(item.injections_per_min || 0);
+    }
+    return Number(item) || 0;
+  });
+  if (dataPoints.length === 1) dataPoints = [0, dataPoints[0]];
+
+  const maxVal = Math.max(5, ...dataPoints);
+  const paddingX = 14;
+  const paddingY = 12;
+  const graphW = width - paddingX * 2;
+  const graphH = height - paddingY * 2;
+  const stepX = graphW / (dataPoints.length - 1);
+
+  // 计算折线坐标
+  const coords = dataPoints.map((val, idx) => {
+    const x = paddingX + idx * stepX;
+    const y = paddingY + graphH - (val / maxVal) * graphH;
+    return { x, y, val };
+  });
+
+  // 1. 绘制荧光面积渐变底色
+  const fillGrad = ctx.createLinearGradient(0, paddingY, 0, height);
+  fillGrad.addColorStop(0, 'rgba(56, 189, 248, 0.32)');
+  fillGrad.addColorStop(0.5, 'rgba(56, 189, 248, 0.12)');
+  fillGrad.addColorStop(1, 'rgba(56, 189, 248, 0.0)');
+
+  ctx.beginPath();
+  ctx.moveTo(coords[0].x, height);
+  coords.forEach(p => ctx.lineTo(p.x, p.y));
+  ctx.lineTo(coords[coords.length - 1].x, height);
+  ctx.closePath();
+  ctx.fillStyle = fillGrad;
+  ctx.fill();
+
+  // 2. 绘制发光青色折线
+  ctx.save();
+  ctx.beginPath();
+  ctx.strokeStyle = '#38bdf8';
+  ctx.lineWidth = 2.4;
+  ctx.shadowColor = 'rgba(56, 189, 248, 0.75)';
+  ctx.shadowBlur = 10;
+  coords.forEach((p, idx) => {
+    if (idx === 0) ctx.moveTo(p.x, p.y);
+    else ctx.lineTo(p.x, p.y);
+  });
+  ctx.stroke();
+  ctx.restore();
+
+  // 若全零显示轻量待机呼吸提示
+  const isAllZero = dataPoints.every(v => v === 0);
+  if (isAllZero) {
+    ctx.save();
+    ctx.fillStyle = 'rgba(148, 163, 184, 0.45)';
+    ctx.font = '12px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('⚡ 矩阵就绪监测中 · 暂无注入峰值，波形将在触发自驱轮次时实时跃升', width / 2, height / 2 + 4);
+    ctx.restore();
+  }
+
+  // 3. 最新活动节点脉冲圆点
+  const lastPoint = coords[coords.length - 1];
+  ctx.beginPath();
+  ctx.arc(lastPoint.x, lastPoint.y, 4, 0, Math.PI * 2);
+  ctx.fillStyle = '#38bdf8';
+  ctx.shadowColor = '#38bdf8';
+  ctx.shadowBlur = 8;
+  ctx.fill();
+
+  ctx.beginPath();
+  ctx.arc(lastPoint.x, lastPoint.y, 7, 0, Math.PI * 2);
+  ctx.strokeStyle = 'rgba(56, 189, 248, 0.4)';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+}
+
+async function fetchTelemetry() {
+  try {
+    const res = await safeFetch('/api/telemetry');
+    if (!res.ok) return;
+    const data = await res.json();
+    if (data) {
+      const t = data.telemetry || data;
+      if (telemRate) telemRate.textContent = (t.injections_per_min || 0).toFixed(1);
+      if (telemUptime) telemUptime.textContent = t.uptime_formatted || '0时 0分';
+      renderTelemetryCanvas(t.history || []);
+    }
+  } catch (err) {
+    // 轮询非阻塞
+  }
+}
+
+async function updateWebhookBadge() {
+  if (!telemWebhookBadge) return;
+  try {
+    const res = await safeFetch('/api/webhook');
+    if (!res.ok) return;
+    const wh = await res.json();
+    if (wh.enabled && wh.url) {
+      const platMap = { feishu: '飞书', dingtalk: '钉钉', wecom: '企微', generic: '通用' };
+      const platName = platMap[wh.platform] || wh.platform;
+      telemWebhookBadge.textContent = `已启用 (${platName})`;
+      telemWebhookBadge.style.color = '#34d399';
+    } else {
+      telemWebhookBadge.textContent = '未配置';
+      telemWebhookBadge.style.color = '#64748b';
+    }
+  } catch (err) {}
+}
+
+// 效能图表显示/隐藏切换
+if (toggleTelemetryBtn && telemetrySection) {
+  toggleTelemetryBtn.addEventListener('click', () => {
+    if (telemetrySection.style.display === 'none') {
+      telemetrySection.style.display = 'block';
+      toggleTelemetryBtn.textContent = '📈 隐藏图表';
+    } else {
+      telemetrySection.style.display = 'none';
+      toggleTelemetryBtn.textContent = '📈 效能图表';
+    }
+  });
+}
+
+// ==========================================================================
+// Webhook 模态弹窗控制 (Webhook Modal Actions)
+// ==========================================================================
+const platformPlaceholders = {
+  feishu: 'https://open.feishu.cn/open-apis/bot/v2/hook/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx',
+  dingtalk: 'https://oapi.dingtalk.com/robot/send?access_token=xxxxxxxxxxxxxxxxxxxx',
+  wecom: 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx',
+  generic: 'https://your-domain.com/api/autopilot-webhook'
+};
+
+if (platformPills) {
+  platformPills.forEach(pill => {
+    pill.addEventListener('click', () => {
+      platformPills.forEach(p => p.classList.remove('active'));
+      pill.classList.add('active');
+      currentWebhookPlatform = pill.dataset.platform || 'feishu';
+      if (whUrlInput && (!whUrlInput.value || Object.values(platformPlaceholders).includes(whUrlInput.value))) {
+        whUrlInput.placeholder = platformPlaceholders[currentWebhookPlatform] || '';
+      }
+    });
+  });
+}
+
+if (openWebhookModalBtn && webhookModal) {
+  openWebhookModalBtn.addEventListener('click', async () => {
+    webhookModal.style.display = 'flex';
+    try {
+      const res = await safeFetch('/api/webhook');
+      if (res.ok) {
+        const wh = await res.json();
+        if (whEnabledCheckbox) whEnabledCheckbox.checked = !!wh.enabled;
+        if (whUrlInput) whUrlInput.value = wh.url || '';
+        if (whNotifyComplete) whNotifyComplete.checked = wh.notify_on_complete !== false;
+        if (whNotifyError) whNotifyError.checked = wh.notify_on_error !== false;
+        if (whNotifyTrigger) whNotifyTrigger.checked = !!wh.notify_on_trigger;
+        
+        currentWebhookPlatform = wh.platform || 'feishu';
+        platformPills.forEach(p => {
+          if (p.dataset.platform === currentWebhookPlatform) p.classList.add('active');
+          else p.classList.remove('active');
+        });
+      }
+    } catch (e) {
+      console.warn('读取 Webhook 配置失败:', e);
+    }
+  });
+}
+
+if (closeWebhookModalBtn && webhookModal) {
+  closeWebhookModalBtn.addEventListener('click', () => {
+    webhookModal.style.display = 'none';
+  });
+}
+
+if (webhookModal) {
+  webhookModal.addEventListener('click', (e) => {
+    if (e.target === webhookModal) {
+      webhookModal.style.display = 'none';
+    }
+  });
+}
+
+// 测试 Webhook 发送
+if (testWebhookBtn) {
+  testWebhookBtn.addEventListener('click', async () => {
+    const url = whUrlInput ? whUrlInput.value.trim() : '';
+    if (!url) {
+      showToast('请先输入 Webhook 接收端 URL', '⚠️');
+      return;
+    }
+    testWebhookBtn.disabled = true;
+    showToast('正在向机器人发送测试通知...', '🧪');
+    try {
+      const res = await safeFetch('/api/webhook/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url, platform: currentWebhookPlatform })
+      });
+      const data = await res.json();
+      if (data.ok) {
+        showToast('测试通知发送成功！请检查群聊消息', '🎉');
+      } else {
+        showToast(`测试发送失败: ${data.message || '请检查 URL 是否有效'}`, '❌');
+      }
+    } catch (err) {
+      showToast(`网络异常: ${err.message}`, '❌');
+    } finally {
+      testWebhookBtn.disabled = false;
+    }
+  });
+}
+
+// 保存 Webhook 配置
+if (saveWebhookBtn) {
+  saveWebhookBtn.addEventListener('click', async () => {
+    const payload = {
+      enabled: whEnabledCheckbox ? whEnabledCheckbox.checked : false,
+      platform: currentWebhookPlatform,
+      url: whUrlInput ? whUrlInput.value.trim() : '',
+      notify_on_complete: whNotifyComplete ? whNotifyComplete.checked : true,
+      notify_on_error: whNotifyError ? whNotifyError.checked : true,
+      notify_on_trigger: whNotifyTrigger ? whNotifyTrigger.checked : false
+    };
+
+    saveWebhookBtn.disabled = true;
+    try {
+      const res = await safeFetch('/api/webhook/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      if (data.ok) {
+        showToast('Webhook 自动化推送配置已保存！', '💾');
+        updateWebhookBadge();
+        if (webhookModal) webhookModal.style.display = 'none';
+      } else {
+        showToast('保存失败，请检查后端状态', '❌');
+      }
+    } catch (err) {
+      showToast(`保存失败: ${err.message}`, '❌');
+    } finally {
+      saveWebhookBtn.disabled = false;
+    }
+  });
+}
+
+// ==========================================================================
 // 初始化与高频巡航轮询循环
 // ==========================================================================
 async function initApp() {
   await fetchStatus();
   await fetchConversations();
   await fetchLogs();
+  await fetchTelemetry();
+  await updateWebhookBadge();
 
   // 1.5 秒轮询状态与日志
   setInterval(() => {
@@ -802,10 +1105,18 @@ async function initApp() {
     }
   }, 1500);
 
-  // 15 秒更新一次会话扫描缓存
+  // 3 秒轮询效能曲线
+  setInterval(() => {
+    if (isPollingActive) {
+      fetchTelemetry();
+    }
+  }, 3000);
+
+  // 15 秒更新一次会话扫描缓存与 Webhook 状态
   setInterval(() => {
     if (isPollingActive) {
       fetchConversations();
+      updateWebhookBadge();
     }
   }, 15000);
 }

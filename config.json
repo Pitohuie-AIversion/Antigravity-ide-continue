@@ -5,7 +5,7 @@
       "id": "9b984826-9361-4145-85fb-75cd741ee997",
       "node_type": "local",
       "title": "/goal 继续无止境开发",
-      "prompt": "继续推进下一项任务",
+      "prompt": "[/goal](slashCommand;goal) 继续全局开发",
       "cooldown": 3.0,
       "max_turns": 9999,
       "enabled": true
@@ -14,7 +14,7 @@
       "id": "b3636e97-3c55-494b-82c5-6b9b1accf5fe",
       "node_type": "local",
       "title": "Antigravity Auto-Pilot Multi-Session",
-      "prompt": "继续",
+      "prompt": "[/goal](slashCommand;goal) 继续全局开发",
       "cooldown": 3.0,
       "max_turns": 9999,
       "enabled": true
@@ -30,7 +30,20 @@
     }
   ],
   "target_conversation_id": "9b984826-9361-4145-85fb-75cd741ee997",
-  "continue_prompt": "继续推进下一项任务",
+  "continue_prompt": "[/goal](slashCommand;goal) 继续全局开发",
   "idle_delay_seconds": 3.0,
-  "max_turns": 9999
+  "max_turns": 9999,
+  "webhook": {
+    "enabled": false,
+    "url": "",
+    "platform": "feishu",
+    "notify_on_trigger": false,
+    "notify_on_complete": true,
+    "notify_on_error": true
+  },
+  "strategy": {
+    "smart_backoff": true,
+    "auto_archive_completed": false,
+    "max_parallel_workers": 6
+  }
 }

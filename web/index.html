@@ -120,6 +120,24 @@
       </div>
     </section>
 
+    <!-- 📈 实时效能与活动图表 (Live Telemetry & Activity Sparkline) -->
+    <section class="telemetry-deck" id="telemetrySection">
+      <div class="telemetry-header-row">
+        <div class="telemetry-title">
+          <span class="telemetry-icon">⚡</span>
+          <span>矩阵实时吞吐量与活跃负载曲线 (Fleet Real-time Telemetry)</span>
+        </div>
+        <div class="telemetry-chips">
+          <span class="telemetry-chip">⚡ 注入速率: <strong id="telemRate">0.0</strong> 轮/分</span>
+          <span class="telemetry-chip">⏱ 运行时长: <strong id="telemUptime">0时 0分</strong></span>
+          <span class="telemetry-chip">🔔 Webhook: <strong id="telemWebhookBadge" style="color: #64748b;">未配置</strong></span>
+        </div>
+      </div>
+      <div class="telemetry-canvas-wrap">
+        <canvas id="telemetryCanvas" width="1000" height="85"></canvas>
+      </div>
+    </section>
+
     <!-- 🚀 多会话并发巡航矩阵看板 (Multi-Session Fleet Matrix) -->
     <section class="fleet-section" id="fleetSection">
       <div class="fleet-header-row">
@@ -128,6 +146,8 @@
           <span class="fleet-count-badge" id="fleetCountBadge">0 个会话运行中</span>
         </div>
         <div class="fleet-actions-group">
+          <button class="btn-pill-action" id="openWebhookModalBtn">🔔 告警推送</button>
+          <button class="btn-pill-action" id="toggleTelemetryBtn">📈 效能图表</button>
           <button class="btn-pill-action" id="startAllFleetBtn">▶ 全部开启</button>
           <button class="btn-pill-action" id="stopAllFleetBtn" style="color: #f43f5e; border-color: rgba(244, 63, 94, 0.3);">⏹ 全部暂停</button>
           <a href="#enrollSection" class="btn-pill-action primary" id="enrollScrollBtn">➕ 纳管新会话</a>
@@ -303,6 +323,65 @@
     </footer>
   </div>
 
+  <!-- Webhook 告警与通知配置弹窗 (Webhook Modal) -->
+  <div class="modal-overlay" id="webhookModal" style="display: none;">
+    <div class="modal-box">
+      <div class="modal-header">
+        <div class="modal-title">
+          <span>🔔</span> Webhook 告警与事件通知配置
+        </div>
+        <button class="modal-close-btn" id="closeWebhookModalBtn">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-row">
+          <label class="custom-checkbox">
+            <input type="checkbox" id="whEnabledCheckbox">
+            <span class="checkmark"></span>
+            <span style="font-weight: 600; color: #f8fafc;">启用 Webhook 自动化推送通知</span>
+          </label>
+        </div>
+
+        <div class="form-group" style="margin-top: 14px;">
+          <label class="form-label">推送目标平台 (Platform)</label>
+          <div class="platform-pills-row" id="platformPillsRow">
+            <button type="button" class="platform-pill active" data-platform="feishu">飞书 / Lark</button>
+            <button type="button" class="platform-pill" data-platform="dingtalk">钉钉 (DingTalk)</button>
+            <button type="button" class="platform-pill" data-platform="wecom">企业微信</button>
+            <button type="button" class="platform-pill" data-platform="generic">通用 Webhook</button>
+          </div>
+        </div>
+
+        <div class="form-group" style="margin-top: 14px;">
+          <label class="form-label">Webhook 接收端 URL</label>
+          <input type="text" class="custom-input" id="whUrlInput" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/..." style="width: 100%; box-sizing: border-box; font-family: var(--font-mono); font-size: 12.5px;">
+        </div>
+
+        <div class="form-group" style="margin-top: 14px;">
+          <label class="form-label">通知触发事件 (Trigger Events)</label>
+          <div class="checkbox-group" style="display: flex; flex-direction: column; gap: 8px; margin-top: 6px;">
+            <label class="custom-checkbox">
+              <input type="checkbox" id="whNotifyComplete" checked>
+              <span class="checkmark"></span>
+              <span>🎉 达成任务完工声明或轮数达标时通知 (Complete)</span>
+            </label>
+            <label class="custom-checkbox">
+              <input type="checkbox" id="whNotifyError" checked>
+              <span class="checkmark"></span>
+              <span>⚠️ 远程/本地出现连接故障或指令注入失败时告警 (Error)</span>
+            </label>
+            <label class="custom-checkbox">
+              <input type="checkbox" id="whNotifyTrigger">
+              <span class="checkmark"></span>
+              <span>⚡ 每轮指令成功自动注入时通知 (Trigger)</span>
+            </label>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-card-action" id="testWebhookBtn">🧪 发送测试通知</button>
+        <button class="btn-card-action primary" id="saveWebhookBtn">💾 保存 Webhook 配置</button>
+      </div>
+    </div>
   <!-- 轻量级浮动 Toast -->
   <div class="toast-container" id="toastContainer"></div>
 

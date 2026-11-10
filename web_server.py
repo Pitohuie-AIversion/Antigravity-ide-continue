@@ -42,10 +42,12 @@ LS_EXE = os.path.join(
 AGENTAPI_BAT = os.path.join(USER_HOME, ".gemini", "antigravity-ide", "bin", "agentapi.bat")
 if getattr(sys, 'frozen', False):
     APP_DIR = os.path.dirname(sys.executable)
-    BUNDLE_DIR = getattr(sys, '_MEIPASS', APP_DIR)
-    WEB_DIR = os.path.join(BUNDLE_DIR, "web")
-    if not os.path.exists(WEB_DIR):
-        WEB_DIR = os.path.join(APP_DIR, "web")
+    local_web = os.path.join(APP_DIR, "web")
+    if os.path.exists(local_web):
+        WEB_DIR = local_web
+    else:
+        BUNDLE_DIR = getattr(sys, '_MEIPASS', APP_DIR)
+        WEB_DIR = os.path.join(BUNDLE_DIR, "web")
     CONFIG_PATH = os.path.join(APP_DIR, "config.json")
 else:
     APP_DIR = os.path.dirname(os.path.abspath(__file__))
