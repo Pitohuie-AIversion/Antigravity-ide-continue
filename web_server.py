@@ -12,6 +12,7 @@ Antigravity Auto-Pilot Web 控制中心与多会话并发自驱巡航守护引�
 
 import os
 import sys
+import re
 import json
 import time
 import socket
@@ -40,6 +41,107 @@ LS_EXE = os.path.join(
     "extensions", "antigravity", "bin", "language_server_windows_x64.exe"
 )
 AGENTAPI_BAT = os.path.join(USER_HOME, ".gemini", "antigravity-ide", "bin", "agentapi.bat")
+
+_cached_ls_env = {"addr": None, "token": None, "time": 0.0}
+
+def get_active_ls_env(force_refresh: bool = False) -> Tuple[Optional[str], Optional[str]]:
+    """Dynamically discover the active Antigravity Language Server port and CSRF token on Windows.
+    This guarantees seamless injection even when user switches Google accounts or restarts the IDE.
+    """
+    global _cached_ls_env
+    now = time.time()
+    if not force_refresh and _cached_ls_env["addr"] and (now - _cached_ls_env["time"] < 60.0):
+        return _cached_ls_env["addr"], _cached_ls_env["token"]
+
+    if sys.platform != "win32":
+        return None, None
+
+    try:
+        startupinfo = None
+        if os.name == 'nt':
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+
+        # 1. Parse listening ports in 20ms using native Windows netstat
+        ports_by_pid = {}
+        try:
+            res_netstat = subprocess.run(
+                ['netstat', '-ano', '-p', 'tcp'],
+                capture_output=True, text=True, startupinfo=startupinfo, timeout=2.0
+            )
+            for line in res_netstat.stdout.splitlines():
+                if 'LISTENING' in line:
+                    parts = line.strip().split()
+                    if len(parts) >= 5:
+                        local_addr, pid_str = parts[1], parts[4]
+                        if ':' in local_addr and pid_str.isdigit():
+                            port = int(local_addr.rsplit(':', 1)[1])
+                            pid = int(pid_str)
+                            ports_by_pid.setdefault(pid, []).append(port)
+        except Exception:
+            pass
+
+        # 2. Query running language_server processes
+        ps_cmd = 'Get-CimInstance Win32_Process -Filter "Name LIKE \'%language_server_windows_x64%\'" | Select-Object ProcessId, CommandLine | ConvertTo-Json'
+        res = subprocess.run(
+            ['powershell', '-NoProfile', '-Command', ps_cmd],
+            capture_output=True, text=True, encoding='utf-8', errors='replace',
+            startupinfo=startupinfo, timeout=4.0
+        )
+        if not res.stdout.strip():
+            return None, None
+        procs = json.loads(res.stdout)
+        if isinstance(procs, dict):
+            procs = [procs]
+
+        # Prioritize main extension server (subclient_type ide, without --enable_lsp)
+        procs_sorted = sorted(procs, key=lambda p: 0 if ('--enable_lsp' not in (p.get('CommandLine') or '')) else 1)
+
+        probe_bin = LS_EXE if os.path.exists(LS_EXE) else AGENTAPI_BAT
+        for p in procs_sorted:
+            pid = p.get('ProcessId')
+            cmdline = p.get('CommandLine') or ''
+            token_m = re.search(r'--csrf_token\s+([a-f0-9\-]+)', cmdline)
+            token = token_m.group(1) if token_m else ''
+            ports = ports_by_pid.get(pid, [])
+            for port in ports:
+                probe_env = os.environ.copy()
+                probe_env['ANTIGRAVITY_LS_ADDRESS'] = f'127.0.0.1:{port}'
+                if token:
+                    probe_env['ANTIGRAVITY_CSRF_TOKEN'] = token
+                test_res = subprocess.run(
+                    [probe_bin, 'agentapi', 'get-conversation-metadata', 'test_probe'] if probe_bin == LS_EXE else [probe_bin, 'get-conversation-metadata', 'test_probe'],
+                    capture_output=True, text=True, encoding='utf-8', errors='replace',
+                    env=probe_env, startupinfo=startupinfo, timeout=2.0
+                )
+                # Successful response or valid RPC trajectory error indicates active language server
+                out = test_res.stdout or ""
+                if test_res.returncode == 0 or "trajectory not found" in out or "conversationMetadata" in out:
+                    addr = f'127.0.0.1:{port}'
+                    _cached_ls_env["addr"] = addr
+                    _cached_ls_env["token"] = token
+                    _cached_ls_env["time"] = now
+                    return addr, token
+
+
+        # Fallback to first available candidate
+        for p in procs_sorted:
+            pid = p.get('ProcessId')
+            cmdline = p.get('CommandLine') or ''
+            token_m = re.search(r'--csrf_token\s+([a-f0-9\-]+)', cmdline)
+            token = token_m.group(1) if token_m else ''
+            ports = ports_by_pid.get(pid, [])
+            if ports and token:
+                addr = f'127.0.0.1:{ports[0]}'
+                _cached_ls_env["addr"] = addr
+                _cached_ls_env["token"] = token
+                _cached_ls_env["time"] = now
+                return addr, token
+    except Exception:
+        pass
+
+    return None, None
+
 if getattr(sys, 'frozen', False):
     APP_DIR = os.path.dirname(sys.executable)
     local_web = os.path.join(APP_DIR, "web")
@@ -121,8 +223,10 @@ class MultiSessionDaemon:
         self.injection_timestamps = deque(maxlen=300)
         self.telemetry_history = deque(maxlen=60)
         self._last_telemetry_snapshot = 0.0
+        self.notification_callback: Optional[Any] = None
 
         # Load initial config and registered sessions
+
         self.load_config()
 
         # Start SSH keepalive background thread
@@ -642,6 +746,13 @@ class MultiSessionDaemon:
                 startupinfo = subprocess.STARTUPINFO()
                 startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
 
+            run_env = os.environ.copy()
+            addr, token = get_active_ls_env()
+            if addr:
+                run_env["ANTIGRAVITY_LS_ADDRESS"] = addr
+            if token:
+                run_env["ANTIGRAVITY_CSRF_TOKEN"] = token
+
             res = subprocess.run(
                 cmd,
                 capture_output=True,
@@ -650,17 +761,41 @@ class MultiSessionDaemon:
                 errors="replace",
                 stdin=subprocess.DEVNULL,
                 startupinfo=startupinfo,
+                env=run_env,
                 timeout=10
             )
             if res.returncode == 0:
                 self.add_log(f"本地注入成功: \"{text}\"", "TRIGGER", session_tag=f"本地/{conv_id[:8]}")
                 return True
             else:
-                self.add_log(f"本地注入失败 (Code {res.returncode}): {res.stderr.strip()}", "ERROR", session_tag=conv_id[:8])
+                # 账户切换或服务重启时，强制刷新地址与令牌重试一次
+                addr, token = get_active_ls_env(force_refresh=True)
+                if addr:
+                    run_env["ANTIGRAVITY_LS_ADDRESS"] = addr
+                if token:
+                    run_env["ANTIGRAVITY_CSRF_TOKEN"] = token
+                retry_res = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    stdin=subprocess.DEVNULL,
+                    startupinfo=startupinfo,
+                    env=run_env,
+                    timeout=10
+                )
+                if retry_res.returncode == 0:
+                    self.add_log(f"本地注入重试成功: \"{text}\"", "TRIGGER", session_tag=f"本地/{conv_id[:8]}")
+                    return True
+
+                err_detail = (retry_res.stderr.strip() or retry_res.stdout.strip() or res.stderr.strip() or res.stdout.strip())
+                self.add_log(f"本地注入失败 (Code {retry_res.returncode}): {err_detail}", "ERROR", session_tag=conv_id[:8])
                 return False
         except Exception as e:
             self.add_log(f"本地注入进程异常: {e}", "ERROR", session_tag=conv_id[:8])
             return False
+
 
     def _get_step_info(self, node: str, conv_id: str):
         # 1. 远程 SSH 检查

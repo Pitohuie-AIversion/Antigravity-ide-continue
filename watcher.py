@@ -271,15 +271,26 @@ class AntigravityWatcher:
                 startupinfo = subprocess.STARTUPINFO()
                 startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
 
+            run_env = os.environ.copy()
+            try:
+                import web_server
+                addr, token = web_server.get_active_ls_env()
+                if addr: run_env["ANTIGRAVITY_LS_ADDRESS"] = addr
+                if token: run_env["ANTIGRAVITY_CSRF_TOKEN"] = token
+            except Exception:
+                pass
+
             res = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
                 errors="replace",
+                env=run_env,
                 startupinfo=startupinfo,
                 timeout=15
             )
+
 
             if res.returncode == 0:
                 self.log(f"已成功注入指令到对话队列: \"{message[:30]}...\"", "SUCCESS")

@@ -27,9 +27,19 @@
       "cooldown": 3.0,
       "max_turns": 9999,
       "enabled": true
+    },
+    {
+      "id": "dcd67e14-92ae-4864-866e-c35abc6e66f1",
+      "node_type": "local",
+      "title": "/goal 继续全局开发",
+      "prompt": "[/goal](slashCommand;goal) 继续全局开发",
+      "cooldown": 3.0,
+      "max_turns": 9999,
+      "enabled": false
     }
   ],
-  "target_conversation_id": "9b984826-9361-4145-85fb-75cd741ee997",
+  "target_conversation_id": "b3636e97-3c55-494b-82c5-6b9b1accf5fe",
+
   "continue_prompt": "[/goal](slashCommand;goal) 继续全局开发",
   "idle_delay_seconds": 3.0,
   "max_turns": 9999,
