@@ -876,6 +876,16 @@ class MultiSessionDaemon:
         ok = self.send_message(node, cid, p_text)
         if not ok:
             self.send_webhook("ERROR", title, cid, f"第 {current_count} 轮指令注入失败")
+            with self.lock:
+                if cid in self.sessions and self.strategy.get("smart_backoff", True):
+                    fail_count = self.sessions[cid].get("fail_count", 0) + 1
+                    self.sessions[cid]["fail_count"] = fail_count
+                    backoff = min(60.0, self.sessions[cid].get("cooldown", 3.0) * (1.6 ** fail_count))
+                    self.sessions[cid]["cooldown_remaining"] = round(backoff, 1)
+        else:
+            with self.lock:
+                if cid in self.sessions:
+                    self.sessions[cid]["fail_count"] = 0
 
         if current_count >= max_t:
             with self.lock:
