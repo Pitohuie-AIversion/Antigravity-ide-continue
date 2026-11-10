@@ -45,7 +45,8 @@ WEB_DIR = os.path.join(os.path.dirname(__file__), "web")
 COMPLETION_KEYWORDS = [
     "所有任务已完成", "全部任务已完成", "所有需求已完成",
     "已全部完成", "代码修改已全部完成", "all tasks completed",
-    "goal_complete"
+    "goal_complete", "已达成任务交付", "任务交付完成",
+    "已全部实现", "全部需求开发完毕", "all goals achieved"
 ]
 
 
@@ -520,7 +521,16 @@ class MultiSessionDaemon:
             if not lines:
                 return -1, False, False, ""
 
-            last_step = json.loads(lines[-1])
+            last_step = None
+            for line_str in reversed(lines[-5:]):
+                try:
+                    last_step = json.loads(line_str)
+                    break
+                except Exception:
+                    continue
+            if not last_step:
+                return -1, False, False, ""
+
             step_idx = last_step.get("step_index", -1)
             step_type = last_step.get("type", "")
             status = last_step.get("status", "")
@@ -529,7 +539,7 @@ class MultiSessionDaemon:
 
             is_finished = (step_type == "PLANNER_RESPONSE" and status == "DONE" and len(tool_calls) == 0)
             content_lower = content.lower()
-            is_completed = is_finished and any(k in content_lower for k in COMPLETION_KEYWORDS)
+            is_completed = is_finished and any(k.lower() in content_lower for k in COMPLETION_KEYWORDS)
 
             return step_idx, is_finished, is_completed, content[:80].replace("\n", " ")
         except Exception:
