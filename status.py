@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-Antigravity Continuous Runner - System Health & Status Inspector
-快速健康巡检工具：检查守护进程、监控目标会话、累计注入轮数与 Web 仿真服务器状态
+Antigravity Continuous Runner - System Health & Fleet Status Inspector
+终端多会话并发健康巡检工具：检查 Web 守护进程、纳管会话矩阵状态、步数与 Web 控制中心
 """
 
 import os
@@ -9,6 +9,7 @@ import sys
 import json
 import time
 import subprocess
+import urllib.request
 
 if sys.platform == "win32":
     try:
@@ -19,33 +20,45 @@ if sys.platform == "win32":
 USER_HOME = os.path.expanduser("~")
 BRAIN_DIR = os.path.join(USER_HOME, ".gemini", "antigravity-ide", "brain")
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
+API_STATUS_URL = "http://127.0.0.1:5300/api/status"
 
 
-def check_python_processes():
-    """检查正在运行的 auto_continue 或 main 守护进程"""
-    active_daemons = []
+def get_live_daemon_status():
+    """尝试从运行中的 5300 控制中心拉取实时全量状态"""
+    try:
+        req = urllib.request.Request(API_STATUS_URL, headers={"User-Agent": "FleetStatusCLI/1.0"})
+        with urllib.request.urlopen(req, timeout=1.5) as resp:
+            if resp.status == 200:
+                return json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        pass
+    return None
+
+
+def check_active_processes():
+    """检查正在运行的 auto_continue, web_server 或 8092 仿真服务器"""
+    active_procs = []
     try:
         if sys.platform == "win32":
-            cmd = "powershell -Command \"Get-WmiObject Win32_Process | Where-Object { $_.CommandLine -like '*auto_continue*' -or $_.CommandLine -like '*watcher*' -or $_.CommandLine -like '*http.server 5218*' } | Select-Object ProcessId, CommandLine\""
+            cmd = "powershell -Command \"Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*web_server.py*' -or $_.CommandLine -like '*auto_continue*' -or $_.CommandLine -like '*http.server 8092*' } | Select-Object ProcessId, CommandLine\""
             res = subprocess.run(cmd, shell=True, capture_output=True, text=True, errors="replace")
             for line in res.stdout.splitlines():
                 line = line.strip()
-                if "auto_continue" in line or "http.server 5218" in line:
-                    active_daemons.append(line)
+                if any(k in line for k in ["web_server.py", "auto_continue", "8092"]):
+                    active_procs.append(line)
     except Exception:
         pass
-    return active_daemons
+    return active_procs
 
 
-def get_target_conversation_stats(conv_id: str):
-    """读取指定会话的 transcript.jsonl 统计数据"""
+def get_local_transcript_summary(conv_id: str):
+    """读取本地会话 transcript 的最新概览"""
     transcript_path = os.path.join(BRAIN_DIR, conv_id, ".system_generated", "logs", "transcript.jsonl")
     if not os.path.exists(transcript_path):
         return None
 
     total_steps = 0
-    planner_done_count = 0
-    user_input_count = 0
+    planner_done = 0
     last_step = {}
 
     try:
@@ -58,12 +71,8 @@ def get_target_conversation_stats(conv_id: str):
                 try:
                     step = json.loads(line)
                     last_step = step
-                    stype = step.get("type", "")
-                    status = step.get("status", "")
-                    if stype == "PLANNER_RESPONSE" and status == "DONE":
-                        planner_done_count += 1
-                    elif stype == "USER_INPUT":
-                        user_input_count += 1
+                    if step.get("type") == "PLANNER_RESPONSE" and step.get("status") == "DONE":
+                        planner_done += 1
                 except Exception:
                     pass
     except Exception:
@@ -71,59 +80,76 @@ def get_target_conversation_stats(conv_id: str):
 
     return {
         "total_steps": total_steps,
-        "planner_done_count": planner_done_count,
-        "user_input_count": user_input_count,
+        "planner_done": planner_done,
         "last_step": last_step,
-        "last_mtime": os.path.getmtime(transcript_path)
+        "mtime": os.path.getmtime(transcript_path)
     }
 
 
 def main():
-    print("=" * 68)
-    print("   🔍 Antigravity Continuous Runner · 状态与健康巡检")
-    print("=" * 68)
+    print("=" * 72)
+    print("   ⚡ Antigravity Auto-Pilot · 多会话并发矩阵健康巡检 (Fleet Status)")
+    print("=" * 72)
 
-    # 1. 读取配置文件
-    target_id = ""
-    if os.path.exists(CONFIG_PATH):
-        try:
-            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-                cfg = json.load(f)
-                target_id = cfg.get("target_conversation_id", "")
-                print(f"[*] 配置文件锁定会话 : {target_id or '未锁定 (动态扫描)'}")
-                print(f"[*] 自动继续提示词   : \"{cfg.get('continue_prompt', '继续')}\"")
-                print(f"[*] 冷却防抖时间     : {cfg.get('idle_delay_seconds', 3)} 秒")
-        except Exception as e:
-            print(f"[!] 读取 config.json 失败: {e}")
+    live_status = get_live_daemon_status()
 
-    # 2. 会话统计
-    if target_id:
-        stats = get_target_conversation_stats(target_id)
-        if stats:
-            print("\n[ 会话健康数据 ]")
-            print(f"  • 总步骤记录数 (Steps)  : {stats['total_steps']}")
-            print(f"  • 用户输入步数 (Inputs) : {stats['user_input_count']}")
-            print(f"  • 完成回复轮数 (Turns)  : {stats['planner_done_count']}")
-            mtime_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(stats["last_mtime"]))
-            print(f"  • 最近一次活动时间      : {mtime_str}")
+    if live_status:
+        active_cnt = live_status.get("active_count", 0)
+        total_cnt = live_status.get("total_count", 0)
+        total_sent = live_status.get("total_sent_count", 0)
+        pid = live_status.get("pid", "--")
 
-            last_s = stats.get("last_step", {})
-            stype = last_s.get("type", "UNKNOWN")
-            status = last_s.get("status", "UNKNOWN")
-            print(f"  • 最新一步状态          : type={stype}, status={status}")
+        print(f"[*] 控制中心状态 : 🟢 在线 (PID: {pid} · http://localhost:5300)")
+        print(f"[*] 纳管会话矩阵 : {active_cnt} / {total_cnt} 正在并发巡航")
+        print(f"[*] 全矩阵累计注入: {total_sent} 轮")
+        print("-" * 72)
+
+        sessions = live_status.get("sessions", [])
+        if sessions:
+            print(f"{'节点':<10} {'会话ID':<12} {'状态':<14} {'当前步数':<10} {'已注入':<8} {'提示词'}")
+            print("-" * 72)
+            for s in sessions:
+                node_short = "本地" if s.get("node_type") == "local" else "恒源云"
+                cid_short = s.get("id", "")[:8] + ".."
+                state = s.get("state", "UNKNOWN")
+                step = f"Step {s.get('current_step', '--')}"
+                sent = f"{s.get('sent_count', 0)} 轮"
+                prompt = s.get("prompt", "继续")[:16]
+                enabled_mark = "🟢" if s.get("enabled") else "⏸️"
+                print(f"{node_short:<10} {cid_short:<12} {enabled_mark} {state:<11} {step:<10} {sent:<8} \"{prompt}\"")
         else:
-            print(f"\n[!] 目标会话目录不存在或尚无日志")
+            print("  ⚪ 暂无纳管会话记录")
 
-    # 3. 运行中进程
-    print("\n[ 活跃守护进程检测 ]")
-    daemons = check_python_processes()
-    if daemons:
-        for d in daemons:
-            print(f"  🟢 {d}")
     else:
-        print("  ⚪ 当前未检测到外部常驻守护进程")
+        print("[*] 控制中心状态 : ⚪ 后端守护进程离线 (可运行 start_ui.bat 启动)")
+        # 从本地 config.json 读取
+        if os.path.exists(CONFIG_PATH):
+            try:
+                with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                    cfg = json.load(f)
+                    monitored = cfg.get("monitored_sessions", [])
+                    print(f"[*] 静态配置纳管数: {len(monitored)} 个会话")
+                    for idx, s in enumerate(monitored, 1):
+                        cid = s.get("id", "")
+                        node = s.get("node_type", "local")
+                        title = s.get("title", cid[:8])
+                        print(f"  {idx}. [{node}] {cid[:8]}... - {title}")
+            except Exception as e:
+                print(f"[!] 读取配置异常: {e}")
 
-    print("\n" + "=" * 68)
+    # 活跃进程与端口提示
+    print("\n[ 活跃系统进程检测 ]")
+    procs = check_active_processes()
+    if procs:
+        for p in procs:
+            print(f"  🟢 {p}")
+    else:
+        print("  ⚪ 当前未检测到常驻服务进程")
+
+    print("\n[ 常用快捷链接 ]")
+    print("  • Web 控制中心 : http://localhost:5300/")
+    print("  • 微光账单预览 : http://localhost:8092/preview.html?v=v58systems")
+    print("=" * 72)
 
 
 if __name__ == "__main__":
