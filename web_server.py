@@ -224,9 +224,9 @@ class MultiSessionDaemon:
         self.telemetry_history = deque(maxlen=60)
         self._last_telemetry_snapshot = 0.0
         self.notification_callback: Optional[Any] = None
+        self._last_config_mtime = 0.0
 
         # Load initial config and registered sessions
-
         self.load_config()
 
         # Start SSH keepalive background thread
@@ -268,62 +268,70 @@ class MultiSessionDaemon:
         self.worker_thread = threading.Thread(target=self._worker_loop, daemon=True)
         self.worker_thread.start()
 
-    def load_config(self):
+    def load_config(self, is_reload: bool = False):
         if os.path.exists(CONFIG_PATH):
             try:
+                self._last_config_mtime = os.path.getmtime(CONFIG_PATH)
                 with open(CONFIG_PATH, "r", encoding="utf-8") as f:
                     cfg = json.load(f)
-                    self.node_type = cfg.get("node_type", "local")
-                    
-                    self.webhook = cfg.get("webhook", {
-                        "enabled": False,
-                        "url": "",
-                        "platform": "feishu",
-                        "notify_on_trigger": False,
-                        "notify_on_complete": True,
-                        "notify_on_error": True
-                    })
-                    self.strategy = cfg.get("strategy", {
-                        "smart_backoff": True,
-                        "auto_archive_completed": False,
-                        "max_parallel_workers": 6
-                    })
-                    
-                    monitored = cfg.get("monitored_sessions", [])
-                    # Backward compatibility for single target_conversation_id
-                    if not monitored and cfg.get("target_conversation_id"):
-                        monitored = [{
-                            "id": cfg.get("target_conversation_id"),
-                            "node_type": cfg.get("node_type", "local"),
-                            "title": "默认迁移会话",
-                            "prompt": cfg.get("continue_prompt", "继续"),
-                            "cooldown": float(cfg.get("idle_delay_seconds", 3.0)),
-                            "max_turns": int(cfg.get("max_turns", 9999)),
-                            "enabled": True
-                        }]
+                    with self.lock:
+                        self.node_type = cfg.get("node_type", self.node_type)
+                        
+                        self.webhook = cfg.get("webhook", self.webhook)
+                        self.strategy = cfg.get("strategy", self.strategy)
+                        
+                        monitored = cfg.get("monitored_sessions", [])
+                        # Backward compatibility for single target_conversation_id
+                        if not monitored and cfg.get("target_conversation_id"):
+                            monitored = [{
+                                "id": cfg.get("target_conversation_id"),
+                                "node_type": cfg.get("node_type", "local"),
+                                "title": "默认迁移会话",
+                                "prompt": cfg.get("continue_prompt", "继续"),
+                                "cooldown": float(cfg.get("idle_delay_seconds", 3.0)),
+                                "max_turns": int(cfg.get("max_turns", 9999)),
+                                "enabled": True
+                            }]
 
-                    for s in monitored:
-                        cid = s.get("id", "").strip()
-                        if not cid:
-                            continue
-                        self.sessions[cid] = {
-                            "id": cid,
-                            "node_type": s.get("node_type", "local"),
-                            "title": s.get("title", cid[:12]),
-                            "prompt": s.get("prompt", "继续"),
-                            "cooldown": float(s.get("cooldown", 3.0)),
-                            "max_turns": int(s.get("max_turns", 9999)),
-                            "enabled": bool(s.get("enabled", True)),
-                            "state": "IDLE" if s.get("enabled", True) else "STOPPED",
-                            "current_step": 0,
-                            "last_handled_step": -1,
-                            "sent_count": 0,
-                            "cooldown_remaining": 0.0,
-                            "idle_start_time": None,
-                            "last_snippet": "",
-                            "error": "",
-                            "updated_at": time.time()
-                        }
+                        configured_ids = set()
+                        for s in monitored:
+                            cid = s.get("id", "").strip()
+                            if not cid:
+                                continue
+                            configured_ids.add(cid)
+                            
+                            if cid in self.sessions:
+                                # Update existing session configuration while preserving live state & counters
+                                cur = self.sessions[cid]
+                                cur["title"] = s.get("title", cur["title"])
+                                cur["prompt"] = s.get("prompt", cur["prompt"])
+                                cur["cooldown"] = float(s.get("cooldown", cur["cooldown"]))
+                                cur["max_turns"] = int(s.get("max_turns", cur["max_turns"]))
+                                new_enabled = bool(s.get("enabled", True))
+                                if cur["enabled"] != new_enabled:
+                                    cur["enabled"] = new_enabled
+                                    cur["state"] = "IDLE" if new_enabled else "STOPPED"
+                            else:
+                                self.sessions[cid] = {
+                                    "id": cid,
+                                    "node_type": s.get("node_type", "local"),
+                                    "title": s.get("title", cid[:12]),
+                                    "prompt": s.get("prompt", "继续"),
+                                    "cooldown": float(s.get("cooldown", 3.0)),
+                                    "max_turns": int(s.get("max_turns", 9999)),
+                                    "enabled": bool(s.get("enabled", True)),
+                                    "state": "IDLE" if s.get("enabled", True) else "STOPPED",
+                                    "current_step": 0,
+                                    "last_handled_step": -1,
+                                    "sent_count": 0,
+                                    "cooldown_remaining": 0.0,
+                                    "idle_start_time": None,
+                                    "last_snippet": "",
+                                    "error": "",
+                                    "updated_at": time.time()
+                                }
+                if is_reload:
+                    self.add_log("检测到外部配置文件修改，已自动热重载 (Hot-Reload)", "SUCCESS", session_tag="CONFIG")
             except Exception as e:
                 self.add_log(f"加载 config.json 失败: {e}", "WARN")
 
@@ -368,8 +376,13 @@ class MultiSessionDaemon:
                 }
             with open(CONFIG_PATH, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
+            try:
+                self._last_config_mtime = os.path.getmtime(CONFIG_PATH)
+            except Exception:
+                pass
         except Exception as e:
             self.add_log(f"持久化 config.json 失败: {e}", "ERROR")
+
 
     def send_webhook(self, event_type: str, title: str, conv_id: str, message: str, extra: Dict[str, Any] = None):
         # Trigger native desktop notification if registered
@@ -916,11 +929,21 @@ class MultiSessionDaemon:
         """High-performance concurrent loop servicing all active sessions."""
         while True:
             try:
+                # 1. 外部 config.json 热重载检测
+                try:
+                    if os.path.exists(CONFIG_PATH):
+                        mtime = os.path.getmtime(CONFIG_PATH)
+                        if self._last_config_mtime > 0 and (mtime - self._last_config_mtime > 0.05):
+                            self.load_config(is_reload=True)
+                except Exception:
+                    pass
+
                 with self.lock:
                     if not self.is_running:
                         active_sessions = []
                     else:
                         active_sessions = [dict(s) for s in self.sessions.values() if s.get("enabled")]
+
 
                 if not active_sessions:
                     time.sleep(1.0)

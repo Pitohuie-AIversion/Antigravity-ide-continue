@@ -146,6 +146,7 @@
           <span class="fleet-count-badge" id="fleetCountBadge">0 个会话运行中</span>
         </div>
         <div class="fleet-actions-group">
+          <button class="btn-pill-action" id="toggleMuteBtn" title="切换提示音开关">🔊 提示音: 开</button>
           <a href="/preview" target="_blank" class="btn-pill-action" id="openPreviewBtn" style="color: #38bdf8; border-color: rgba(56, 189, 248, 0.35);">📱 微光账单仿真</a>
           <button class="btn-pill-action" id="openWebhookModalBtn">🔔 告警推送</button>
           <button class="btn-pill-action" id="toggleTelemetryBtn">📈 效能图表</button>
@@ -155,10 +156,36 @@
         </div>
       </div>
 
+      <!-- 矩阵过滤、检索与排序工具栏 (Fleet Toolbar) -->
+      <div class="fleet-toolbar-row" id="fleetToolbarRow">
+        <div class="fleet-search-box">
+          <span class="search-icon">🔍</span>
+          <input type="text" id="fleetSearchInput" placeholder="快速检索会话标题、ID、设备或执行状态..." autocomplete="off">
+          <button class="clear-search-btn" id="clearSearchBtn" style="display: none;">✕</button>
+        </div>
+        <div class="fleet-filter-pills" id="fleetFilterPills">
+          <button type="button" class="filter-pill active" data-filter="all">全部 (<span id="countAll">0</span>)</button>
+          <button type="button" class="filter-pill" data-filter="active">巡航中 (<span id="countActive">0</span>)</button>
+          <button type="button" class="filter-pill" data-filter="busy">思考中 (<span id="countBusy">0</span>)</button>
+          <button type="button" class="filter-pill" data-filter="stopped">已暂停 (<span id="countStopped">0</span>)</button>
+          <button type="button" class="filter-pill" data-filter="local">🖥️ 本地 (<span id="countLocal">0</span>)</button>
+          <button type="button" class="filter-pill" data-filter="ssh">☁️ 远程 (<span id="countSsh">0</span>)</button>
+        </div>
+        <div class="fleet-sort-wrap">
+          <span class="sort-label">排序:</span>
+          <select id="fleetSortSelect" class="custom-select-small">
+            <option value="activity">最新心跳</option>
+            <option value="step">步数从高到低</option>
+            <option value="name">会话标题</option>
+          </select>
+        </div>
+      </div>
+
       <!-- 动态会话矩阵容器 -->
       <div class="fleet-grid" id="fleetGrid">
         <!-- 动态渲染卡片 -->
       </div>
+
     </section>
 
     <!-- 参数配置与纳管新会话中心 -->

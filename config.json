@@ -38,8 +38,7 @@
       "enabled": false
     }
   ],
-  "target_conversation_id": "b3636e97-3c55-494b-82c5-6b9b1accf5fe",
-
+  "target_conversation_id": "9b984826-9361-4145-85fb-75cd741ee997",
   "continue_prompt": "[/goal](slashCommand;goal) 继续全局开发",
   "idle_delay_seconds": 3.0,
   "max_turns": 9999,

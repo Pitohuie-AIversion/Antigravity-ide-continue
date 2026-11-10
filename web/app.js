@@ -63,6 +63,23 @@ const cooldownInput = document.getElementById('cooldownInput');
 const maxTurnsInput = document.getElementById('maxTurnsInput');
 const soundAlertCheckbox = document.getElementById('soundAlertCheckbox');
 
+// Fleet Toolbar Elements
+const fleetSearchInput = document.getElementById('fleetSearchInput');
+const clearSearchBtn = document.getElementById('clearSearchBtn');
+const fleetSortSelect = document.getElementById('fleetSortSelect');
+const toggleMuteBtn = document.getElementById('toggleMuteBtn');
+const filterPills = document.querySelectorAll('.filter-pill');
+const countAll = document.getElementById('countAll');
+const countActive = document.getElementById('countActive');
+const countBusy = document.getElementById('countBusy');
+const countStopped = document.getElementById('countStopped');
+const countLocal = document.getElementById('countLocal');
+const countSsh = document.getElementById('countSsh');
+
+let currentFleetFilter = 'all';
+let currentFleetSearch = '';
+let currentFleetSort = 'activity';
+
 const consoleBody = document.getElementById('consoleBody');
 const autoScrollCheckbox = document.getElementById('autoScrollCheckbox');
 const copyLogsBtn = document.getElementById('copyLogsBtn');
@@ -277,9 +294,22 @@ function updateUIWithStatus(status) {
 function renderFleetMatrix(sessions) {
   if (!fleetGrid) return;
 
+  const total = sessions ? sessions.length : 0;
+  const activeCount = sessions ? sessions.filter(s => s.enabled).length : 0;
+  const busyCount = sessions ? sessions.filter(s => s.enabled && s.state === 'BUSY').length : 0;
+  const stoppedCount = sessions ? sessions.filter(s => !s.enabled || s.state === 'STOPPED' || s.state === 'COMPLETED').length : 0;
+  const localCount = sessions ? sessions.filter(s => !s.node_type || !s.node_type.startsWith('ssh:')).length : 0;
+  const sshCount = sessions ? sessions.filter(s => s.node_type && s.node_type.startsWith('ssh:')).length : 0;
+
+  if (countAll) countAll.innerText = total;
+  if (countActive) countActive.innerText = activeCount;
+  if (countBusy) countBusy.innerText = busyCount;
+  if (countStopped) countStopped.innerText = stoppedCount;
+  if (countLocal) countLocal.innerText = localCount;
+  if (countSsh) countSsh.innerText = sshCount;
+
   if (fleetCountBadge) {
-    const active = sessions.filter(s => s.enabled).length;
-    fleetCountBadge.innerText = `${active} / ${sessions.length} 巡航中`;
+    fleetCountBadge.innerText = `${activeCount} / ${total} 巡航中`;
   }
 
   if (!sessions || sessions.length === 0) {
@@ -296,8 +326,56 @@ function renderFleetMatrix(sessions) {
     return;
   }
 
+  // 1. 关键词搜索过滤
+  let filtered = sessions.slice();
+  const q = currentFleetSearch.trim().toLowerCase();
+  if (q) {
+    filtered = filtered.filter(s => {
+      const titleMatch = (s.title || '').toLowerCase().includes(q);
+      const idMatch = (s.id || '').toLowerCase().includes(q);
+      const nodeMatch = (s.node_type || '').toLowerCase().includes(q);
+      const promptMatch = (s.prompt || '').toLowerCase().includes(q);
+      const stateMatch = (s.state || '').toLowerCase().includes(q);
+      return titleMatch || idMatch || nodeMatch || promptMatch || stateMatch;
+    });
+  }
+
+  // 2. 状态标签过滤
+  if (currentFleetFilter === 'active') {
+    filtered = filtered.filter(s => s.enabled);
+  } else if (currentFleetFilter === 'busy') {
+    filtered = filtered.filter(s => s.enabled && s.state === 'BUSY');
+  } else if (currentFleetFilter === 'stopped') {
+    filtered = filtered.filter(s => !s.enabled || s.state === 'STOPPED' || s.state === 'COMPLETED');
+  } else if (currentFleetFilter === 'local') {
+    filtered = filtered.filter(s => !s.node_type || !s.node_type.startsWith('ssh:'));
+  } else if (currentFleetFilter === 'ssh') {
+    filtered = filtered.filter(s => s.node_type && s.node_type.startsWith('ssh:'));
+  }
+
+  // 3. 排序
+  if (currentFleetSort === 'step') {
+    filtered.sort((a, b) => (b.current_step || 0) - (a.current_step || 0));
+  } else if (currentFleetSort === 'name') {
+    filtered.sort((a, b) => (a.title || '').localeCompare(b.title || ''));
+  } else {
+    filtered.sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
+  }
+
+  if (filtered.length === 0) {
+    fleetGrid.innerHTML = `
+      <div class="fleet-empty-state" style="grid-column: 1 / -1; padding: 36px 20px;">
+        <span class="empty-icon">🔍</span>
+        <div class="empty-title">未找到匹配的会话</div>
+        <div class="empty-sub">当前筛选或检索条件下无匹配会话。请尝试清除检索关键词或切换筛选标签。</div>
+        <button class="btn-pill-action" onclick="resetFleetFilter()" style="margin-top: 8px;">重置筛选条件</button>
+      </div>
+    `;
+    return;
+  }
+
   fleetGrid.innerHTML = '';
-  sessions.forEach(s => {
+  filtered.forEach(s => {
     const isRemote = s.node_type && s.node_type.startsWith('ssh:');
     const nodeLabel = isRemote ? '☁️ 恒源云西区' : '🖥️ 本地开发';
     const nodeClass = isRemote ? 'remote' : 'local';
@@ -429,6 +507,78 @@ function renderFleetMatrix(sessions) {
       }
     });
   });
+}
+
+// ==========================================================================
+// 矩阵检索、筛选与排序工具栏事件绑定 (Fleet Toolbar)
+// ==========================================================================
+window.resetFleetFilter = function() {
+  currentFleetFilter = 'all';
+  currentFleetSearch = '';
+  currentFleetSort = 'activity';
+  if (fleetSearchInput) fleetSearchInput.value = '';
+  if (clearSearchBtn) clearSearchBtn.style.display = 'none';
+  if (fleetSortSelect) fleetSortSelect.value = 'activity';
+  filterPills.forEach(p => {
+    if (p.dataset.filter === 'all') p.classList.add('active');
+    else p.classList.remove('active');
+  });
+  renderFleetMatrix(appState.sessions || []);
+};
+
+function initFleetToolbar() {
+  if (fleetSearchInput) {
+    fleetSearchInput.addEventListener('input', (e) => {
+      currentFleetSearch = e.target.value;
+      if (clearSearchBtn) {
+        clearSearchBtn.style.display = currentFleetSearch ? 'block' : 'none';
+      }
+      renderFleetMatrix(appState.sessions || []);
+    });
+  }
+
+  if (clearSearchBtn) {
+    clearSearchBtn.addEventListener('click', () => {
+      if (fleetSearchInput) fleetSearchInput.value = '';
+      currentFleetSearch = '';
+      clearSearchBtn.style.display = 'none';
+      renderFleetMatrix(appState.sessions || []);
+    });
+  }
+
+  filterPills.forEach(pill => {
+    pill.addEventListener('click', () => {
+      filterPills.forEach(p => p.classList.remove('active'));
+      pill.classList.add('active');
+      currentFleetFilter = pill.dataset.filter || 'all';
+      renderFleetMatrix(appState.sessions || []);
+    });
+  });
+
+  if (fleetSortSelect) {
+    fleetSortSelect.addEventListener('change', (e) => {
+      currentFleetSort = e.target.value || 'activity';
+      renderFleetMatrix(appState.sessions || []);
+    });
+  }
+
+  // 提示音静音初始状态与切换
+  const savedMute = localStorage.getItem('antigravity_sound_muted');
+  if (savedMute === 'true') {
+    if (soundAlertCheckbox) soundAlertCheckbox.checked = false;
+    if (toggleMuteBtn) toggleMuteBtn.innerText = '🔇 提示音: 关';
+  }
+
+  if (toggleMuteBtn) {
+    toggleMuteBtn.addEventListener('click', () => {
+      if (!soundAlertCheckbox) return;
+      soundAlertCheckbox.checked = !soundAlertCheckbox.checked;
+      const isMuted = !soundAlertCheckbox.checked;
+      toggleMuteBtn.innerText = isMuted ? '🔇 提示音: 关' : '🔊 提示音: 开';
+      localStorage.setItem('antigravity_sound_muted', isMuted ? 'true' : 'false');
+      showToast(`提示音已${isMuted ? '关闭' : '开启'}`, isMuted ? '🔇' : '🔊');
+    });
+  }
 }
 
 // 卡片交互快捷处理
@@ -1203,6 +1353,7 @@ if (saveWebhookBtn) {
 // 初始化与高频巡航轮询循环
 // ==========================================================================
 async function initApp() {
+  initFleetToolbar();
   await fetchStatus();
   await fetchConversations();
   await fetchLogs();
