@@ -100,6 +100,18 @@ const chooseImportFileBtn = document.getElementById('chooseImportFileBtn');
 const importConfigFile = document.getElementById('importConfigFile');
 const submitImportBtn = document.getElementById('submitImportBtn');
 
+// Notification & Strategy Elements
+const toggleNotifBtn = document.getElementById('toggleNotifBtn');
+const openStrategyModalBtn = document.getElementById('openStrategyModalBtn');
+const strategyModal = document.getElementById('strategyModal');
+const closeStrategyModalBtn = document.getElementById('closeStrategyModalBtn');
+const cancelStrategyModalBtn = document.getElementById('cancelStrategyModalBtn');
+const saveStrategyModalBtn = document.getElementById('saveStrategyModalBtn');
+const stratAutoAdoptCheckbox = document.getElementById('stratAutoAdoptCheckbox');
+const stratSmartBackoffCheckbox = document.getElementById('stratSmartBackoffCheckbox');
+const stratAutoArchiveCheckbox = document.getElementById('stratAutoArchiveCheckbox');
+const stratStallAlertInput = document.getElementById('stratStallAlertInput');
+
 let selectedSessionIds = new Set();
 
 const consoleBody = document.getElementById('consoleBody');
@@ -312,9 +324,10 @@ function updateUIWithStatus(status) {
   // 3. 渲染多会话矩阵看板
   renderFleetMatrix(sessions);
 
-  // 4. 音频提示：若全量注入增加
+  // 4. 音频提示与桌面通知：若全量注入增加
   if (totalSent > lastTotalSentCount && lastTotalSentCount > 0) {
     playChime(659.2); // E5
+    sendDesktopNotification('全矩阵自动注入触发', `已完成新一轮指令注入，全矩阵累计已注入 ${totalSent} 轮！`);
   }
   lastTotalSentCount = totalSent;
 }
@@ -473,6 +486,7 @@ function renderFleetMatrix(sessions) {
             <input type="checkbox" class="card-select-checkbox" data-cid="${s.id}" ${selectedSessionIds.has(s.id) ? 'checked' : ''}>
           </label>
           <span class="node-chip ${nodeClass}">${nodeLabel}</span>
+          ${s.node_type.startsWith('ssh:') ? `<span class="node-ping-badge" onclick="pingSshNode('${escapeHtml(s.node_type)}', this)" title="点击测试远程 SSH 连通性与网络延迟">⚡ 测速</span>` : ''}
           <span class="conv-id-chip" title="点击复制完整会话ID" onclick="copyText('${s.id}')">${s.id.slice(0, 8)}...</span>
         </div>
         <label class="fleet-switch" title="开启/暂停该会话自驱巡航">
@@ -844,6 +858,156 @@ function initBackupRestoreModal() {
         showToast('JSON 解析失败，请检查配置内容是否合法', '❌');
       } finally {
         submitImportBtn.disabled = false;
+      }
+    });
+  }
+}
+
+// ==========================================================================
+// 操作系统桌面弹窗通知 (Web Notification API)
+// ==========================================================================
+function sendDesktopNotification(title, body) {
+  const notifEnabled = localStorage.getItem('antigravity_notif_enabled') === 'true';
+  if (!notifEnabled || !('Notification' in window)) return;
+  if (Notification.permission === 'granted') {
+    try {
+      new Notification(`Antigravity AutoPilot · ${title}`, {
+        body: body,
+        icon: '/favicon.ico',
+        tag: 'autopilot-event'
+      });
+    } catch (e) {}
+  }
+}
+
+function initNotifications() {
+  const notifEnabled = localStorage.getItem('antigravity_notif_enabled') === 'true';
+  if (toggleNotifBtn) {
+    toggleNotifBtn.innerText = notifEnabled ? '🔔 桌面通知: 开' : '🔕 桌面通知: 关';
+    toggleNotifBtn.addEventListener('click', async () => {
+      if (!('Notification' in window)) {
+        showToast('当前浏览器不支持桌面通知 API', '⚠️');
+        return;
+      }
+      if (Notification.permission !== 'granted') {
+        const perm = await Notification.requestPermission();
+        if (perm !== 'granted') {
+          showToast('桌面通知授权未开启', '⚠️');
+          localStorage.setItem('antigravity_notif_enabled', 'false');
+          toggleNotifBtn.innerText = '🔕 桌面通知: 关';
+          return;
+        }
+      }
+      const cur = localStorage.getItem('antigravity_notif_enabled') === 'true';
+      const next = !cur;
+      localStorage.setItem('antigravity_notif_enabled', next ? 'true' : 'false');
+      toggleNotifBtn.innerText = next ? '🔔 桌面通知: 开' : '🔕 桌面通知: 关';
+      showToast(`桌面弹窗通知已${next ? '开启' : '关闭'}`, next ? '🔔' : '🔕');
+      if (next) {
+        sendDesktopNotification('通知已就绪', '当会话触发注入、达成完工或发生卡顿预警，将向您推送桌面弹窗。');
+      }
+    });
+  }
+}
+
+// ==========================================================================
+// 远程节点实时 SSH 连通性与网络测速
+// ==========================================================================
+window.pingSshNode = async function(nodeType, el) {
+  const host = nodeType.replace('ssh:', '');
+  if (!host || !el) return;
+  const originalText = el.textContent;
+  el.textContent = '⏳ 测速中...';
+  el.style.opacity = '0.7';
+  try {
+    const res = await safeFetch('/api/ssh/ping', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ host })
+    });
+    const data = await res.json();
+    if (data.ok) {
+      el.textContent = `🟢 ${data.latency_ms}ms`;
+      el.style.color = '#10b981';
+      showToast(`远程节点 [${host}] 测速正常: 往返延迟 ${data.latency_ms}ms`, '🟢');
+    } else {
+      el.textContent = '🔴 异常';
+      el.style.color = '#f43f5e';
+      showToast(`远程节点 [${host}] 测速失败: ${data.error || '无法连通'}`, '❌');
+    }
+  } catch (err) {
+    el.textContent = '⚠️ 失败';
+    showToast(`测速异常: ${err.message}`, '⚠️');
+  } finally {
+    el.style.opacity = '1';
+    setTimeout(() => {
+      el.textContent = originalText;
+      el.style.color = '';
+    }, 6000);
+  }
+};
+
+// ==========================================================================
+// 巡航调度与自愈策略设置弹窗 (Strategy Modal)
+// ==========================================================================
+function initStrategyModal() {
+  if (openStrategyModalBtn && strategyModal) {
+    openStrategyModalBtn.addEventListener('click', async () => {
+      strategyModal.style.display = 'flex';
+      try {
+        const res = await safeFetch('/api/telemetry');
+        if (res.ok) {
+          const data = await res.json();
+          const strat = data.strategy || {};
+          if (stratAutoAdoptCheckbox) stratAutoAdoptCheckbox.checked = !!strat.auto_adopt_sessions;
+          if (stratSmartBackoffCheckbox) stratSmartBackoffCheckbox.checked = strat.smart_backoff !== false;
+          if (stratAutoArchiveCheckbox) stratAutoArchiveCheckbox.checked = !!strat.auto_archive_completed;
+          if (stratStallAlertInput) stratStallAlertInput.value = strat.stall_alert_seconds || 300;
+        }
+      } catch (e) {}
+    });
+  }
+
+  function closeStrategy() {
+    if (strategyModal) strategyModal.style.display = 'none';
+  }
+
+  if (closeStrategyModalBtn) closeStrategyModalBtn.addEventListener('click', closeStrategy);
+  if (cancelStrategyModalBtn) cancelStrategyModalBtn.addEventListener('click', closeStrategy);
+  if (strategyModal) {
+    strategyModal.addEventListener('click', (e) => {
+      if (e.target === strategyModal) closeStrategy();
+    });
+  }
+
+  if (saveStrategyModalBtn) {
+    saveStrategyModalBtn.addEventListener('click', async () => {
+      saveStrategyModalBtn.disabled = true;
+      saveStrategyModalBtn.innerText = '⏳ 保存中...';
+      try {
+        const payload = {
+          auto_adopt_sessions: stratAutoAdoptCheckbox ? stratAutoAdoptCheckbox.checked : false,
+          smart_backoff: stratSmartBackoffCheckbox ? stratSmartBackoffCheckbox.checked : true,
+          auto_archive_completed: stratAutoArchiveCheckbox ? stratAutoArchiveCheckbox.checked : false,
+          stall_alert_seconds: stratStallAlertInput ? parseInt(stratStallAlertInput.value, 10) || 300 : 300
+        };
+        const res = await safeFetch('/api/strategy/update', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (data.ok) {
+          showToast('巡航调度策略已成功更新并热生效！', '⚙️');
+          closeStrategy();
+        } else {
+          showToast('更新失败: ' + (data.error || '未知错误'), '❌');
+        }
+      } catch (err) {
+        showToast('保存策略网络异常: ' + err.message, '⚠️');
+      } finally {
+        saveStrategyModalBtn.disabled = false;
+        saveStrategyModalBtn.innerText = '💾 保存生效';
       }
     });
   }
@@ -1779,6 +1943,8 @@ async function initApp() {
   initFleetToolbar();
   initLogConsoleToolbar();
   initBackupRestoreModal();
+  initNotifications();
+  initStrategyModal();
   await fetchStatus();
   await fetchConversations();
   await fetchLogs();

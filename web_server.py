@@ -218,8 +218,11 @@ class MultiSessionDaemon:
         self.strategy: Dict[str, Any] = {
             "smart_backoff": True,
             "auto_archive_completed": False,
+            "auto_adopt_sessions": False,
+            "stall_alert_seconds": 300,
             "max_parallel_workers": 6
         }
+        self._last_auto_adopt_check = 0.0
         self.injection_timestamps = deque(maxlen=300)
         self.telemetry_history = deque(maxlen=60)
         self._last_telemetry_snapshot = 0.0
@@ -278,7 +281,11 @@ class MultiSessionDaemon:
                         self.node_type = cfg.get("node_type", self.node_type)
                         
                         self.webhook = cfg.get("webhook", self.webhook)
-                        self.strategy = cfg.get("strategy", self.strategy)
+                        cfg_strat = cfg.get("strategy", {})
+                        self.strategy["smart_backoff"] = bool(cfg_strat.get("smart_backoff", True))
+                        self.strategy["auto_archive_completed"] = bool(cfg_strat.get("auto_archive_completed", False))
+                        self.strategy["auto_adopt_sessions"] = bool(cfg_strat.get("auto_adopt_sessions", False))
+                        self.strategy["stall_alert_seconds"] = int(cfg_strat.get("stall_alert_seconds", 300))
                         
                         monitored = cfg.get("monitored_sessions", [])
                         # Backward compatibility for single target_conversation_id
@@ -993,6 +1000,28 @@ class MultiSessionDaemon:
 
                 now = time.time()
 
+                # 2. 自动嗅探与纳管新活动会话 (Auto-adopt sessions)
+                if self.strategy.get("auto_adopt_sessions") and (now - self._last_auto_adopt_check > 25.0):
+                    self._last_auto_adopt_check = now
+                    try:
+                        recent_convs = self.scan_conversations(node="local", limit=6, force=True)
+                        for c in recent_convs:
+                            cid = c.get("id")
+                            if cid and cid not in self.sessions and c.get("step_count", 0) >= 1:
+                                prev = c.get("preview", "")[:35] or f"本地·{cid[:8]}"
+                                self.add_session(
+                                    conv_id=cid,
+                                    node_type="local",
+                                    title=prev,
+                                    prompt=self.continue_prompt or "继续",
+                                    cooldown=max(1.0, float(self.idle_delay_seconds)),
+                                    max_turns=9999,
+                                    enabled=True
+                                )
+                                self.add_log(f"自动嗅探并纳管新活动会话 [{prev}] (当前第 {c.get('step_count')} 步)", "SUCCESS", session_tag="AUTO-ADOPT")
+                    except Exception:
+                        pass
+
                 # Process all active sessions concurrently using thread pool
                 futures = {
                     self.executor.submit(self._get_step_info, s["node_type"], s["id"]): s
@@ -1442,8 +1471,45 @@ class AutoPilotHTTPHandler(SimpleHTTPRequestHandler):
                     daemon.strategy["smart_backoff"] = bool(body["smart_backoff"])
                 if "auto_archive_completed" in body:
                     daemon.strategy["auto_archive_completed"] = bool(body["auto_archive_completed"])
+                if "auto_adopt_sessions" in body:
+                    daemon.strategy["auto_adopt_sessions"] = bool(body["auto_adopt_sessions"])
+                if "stall_alert_seconds" in body:
+                    daemon.strategy["stall_alert_seconds"] = max(30, int(body["stall_alert_seconds"]))
             daemon.save_config()
             self.send_json({"ok": True, "strategy": daemon.strategy})
+
+        elif path == "/api/ssh/ping":
+            host = body.get("host", "").strip() or "seetacloud-westc"
+            t0 = time.time()
+            try:
+                res = run_ssh(host, "echo __ANTIGRAVITY_PONG__ && test -x /root/.gemini/antigravity-ide/bin/agentapi_auto.sh && echo __AGENTAPI_OK__", timeout=6.0)
+                latency_ms = round((time.time() - t0) * 1000, 1)
+                out = res.stdout or ""
+                if res.returncode == 0 and "__ANTIGRAVITY_PONG__" in out:
+                    agentapi_ok = "__AGENTAPI_OK__" in out
+                    self.send_json({
+                        "ok": True,
+                        "host": host,
+                        "latency_ms": latency_ms,
+                        "agentapi_ok": agentapi_ok,
+                        "status": "ONLINE"
+                    })
+                else:
+                    err = res.stderr.strip() or res.stdout.strip() or "SSH 连接超时或握手失败"
+                    self.send_json({
+                        "ok": False,
+                        "host": host,
+                        "error": err,
+                        "latency_ms": latency_ms,
+                        "status": "OFFLINE"
+                    })
+            except Exception as e:
+                self.send_json({
+                    "ok": False,
+                    "host": host,
+                    "error": str(e),
+                    "status": "ERROR"
+                })
 
         elif path == "/api/restart":
             self.send_json({"ok": True, "message": "服务正在重启中..."})

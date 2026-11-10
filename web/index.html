@@ -147,6 +147,8 @@
         </div>
         <div class="fleet-actions-group">
           <button class="btn-pill-action" id="toggleMuteBtn" title="切换提示音开关">🔊 提示音: 开</button>
+          <button class="btn-pill-action" id="toggleNotifBtn" title="切换操作系统桌面弹窗通知">🔔 桌面通知: 关</button>
+          <button class="btn-pill-action" id="openStrategyModalBtn" title="配置智能重试退避与自动嗅探">⚙️ 策略设置</button>
           <button class="btn-pill-action" id="openBackupModalBtn">💾 备份/导入</button>
           <a href="/preview" target="_blank" class="btn-pill-action" id="openPreviewBtn" style="color: #38bdf8; border-color: rgba(56, 189, 248, 0.35);">📱 微光账单仿真</a>
           <button class="btn-pill-action" id="openWebhookModalBtn">🔔 告警推送</button>
@@ -523,6 +525,69 @@
           <button class="btn-pill-action" id="chooseImportFileBtn">📁 选择文件</button>
           <button class="btn-pill-action primary" id="submitImportBtn">🚀 确认导入配置</button>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ⚙️ 巡航调度与自愈策略设置弹窗 (Strategy Modal) -->
+  <div class="modal-overlay" id="strategyModal" style="display: none;">
+    <div class="modal-box" style="max-width: 500px;">
+      <div class="modal-header">
+        <div class="modal-title">
+          <span>⚙️</span> <span>巡航调度与自愈策略设置</span>
+        </div>
+        <button class="modal-close-btn" id="closeStrategyModalBtn">✕</button>
+      </div>
+      <div class="modal-body" style="padding: 20px;">
+        <div class="modal-section-title">自驱巡航高级策略</div>
+        <div style="display: flex; flex-direction: column; gap: 14px; margin-top: 14px;">
+          <label class="custom-checkbox" style="font-size: 13px;">
+            <input type="checkbox" id="stratAutoAdoptCheckbox">
+            <span class="checkmark"></span>
+            <div>
+              <strong>自动嗅探并纳管新活动会话 (Auto-Adopt)</strong>
+              <div style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">
+                当 IDE 开启新对话窗口且产生执行步骤时，后台守护自动将其加入监控池并发巡航
+              </div>
+            </div>
+          </label>
+
+          <label class="custom-checkbox" style="font-size: 13px;">
+            <input type="checkbox" id="stratSmartBackoffCheckbox" checked>
+            <span class="checkmark"></span>
+            <div>
+              <strong>智能错误退避 (Smart Backoff)</strong>
+              <div style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">
+                若单次注入失败（如 LSP 暂时断连），自动倍增冷却时间（最大 60s），避免雪崩重试
+              </div>
+            </div>
+          </label>
+
+          <label class="custom-checkbox" style="font-size: 13px;">
+            <input type="checkbox" id="stratAutoArchiveCheckbox">
+            <span class="checkmark"></span>
+            <div>
+              <strong>完工声明自动归档 (Auto-Archive)</strong>
+              <div style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">
+                当检测到会话输出包含完工关键词时，自动暂停并设为完工状态
+              </div>
+            </div>
+          </label>
+
+          <div style="margin-top: 8px;">
+            <label style="font-size: 12px; font-weight: 600; color: var(--text-dim); display: block; margin-bottom: 6px;">
+              会话超时/卡顿预警阈值 (秒):
+            </label>
+            <div style="display: flex; gap: 10px; align-items: center;">
+              <input type="number" id="stratStallAlertInput" class="custom-input" min="30" max="3600" value="300" style="width: 120px;">
+              <span style="font-size: 11.5px; color: var(--text-dim);">超过此时长未结束将标黄高亮预警</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer" style="display: flex; justify-content: flex-end; gap: 10px; padding: 12px 20px; border-top: 1px solid var(--border-subtle);">
+        <button class="btn-card-action" id="cancelStrategyModalBtn">取消</button>
+        <button class="btn-card-action primary" id="saveStrategyModalBtn">💾 保存生效</button>
       </div>
     </div>
   </div>
