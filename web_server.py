@@ -1017,8 +1017,17 @@ class MultiSessionDaemon:
                             curr["cooldown_remaining"] = 0.0
                             if step_idx == -1 and "拒绝连接" in snippet:
                                 curr["state"] = "OFFLINE"
+                                curr["busy_start_time"] = None
+                                curr["busy_duration"] = 0
+                            elif not finished:
+                                curr["state"] = "BUSY"
+                                if curr.get("busy_start_time") is None:
+                                    curr["busy_start_time"] = now
+                                curr["busy_duration"] = int(now - curr["busy_start_time"])
                             else:
-                                curr["state"] = "BUSY" if not finished else "IDLE"
+                                curr["state"] = "IDLE"
+                                curr["busy_start_time"] = None
+                                curr["busy_duration"] = 0
 
             except Exception as e:
                 print(f"[Worker Error] {e}", flush=True)

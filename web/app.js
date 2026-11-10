@@ -87,6 +87,15 @@ const clearLogsBtn = document.getElementById('clearLogsBtn');
 const quickTestLspBtn = document.getElementById('quickTestLspBtn');
 const toastContainer = document.getElementById('toastContainer');
 
+// Log Console Toolbar Elements
+const logSearchInput = document.getElementById('logSearchInput');
+const clearLogSearchBtn = document.getElementById('clearLogSearchBtn');
+const logLevelPills = document.querySelectorAll('.log-filter-pill');
+
+let currentLogLevel = 'ALL';
+let currentLogSearch = '';
+let cachedLogs = [];
+
 // Telemetry & Webhook Elements
 const telemetrySection = document.getElementById('telemetrySection');
 const toggleTelemetryBtn = document.getElementById('toggleTelemetryBtn');
@@ -388,8 +397,17 @@ function renderFleetMatrix(sessions) {
       statusText = '已暂停';
       statusClass = 'stopped';
     } else if (s.state === 'BUSY') {
-      statusText = `⚡ 思考执行中 (Step ${s.current_step})`;
-      statusClass = 'busy';
+      const dur = s.busy_duration || 0;
+      let durText = '';
+      if (dur >= 60) {
+        const m = Math.floor(dur / 60);
+        const sec = dur % 60;
+        durText = ` · ${m}m ${sec}s`;
+      } else if (dur > 0) {
+        durText = ` · ${dur}s`;
+      }
+      statusText = `⚡ 思考执行中 (Step ${s.current_step}${durText})`;
+      statusClass = dur > 300 ? 'busy stalled' : 'busy';
       cardStateClass = 'busy';
     } else if (s.state === 'STABILIZING') {
       statusText = `⏱ 冷却中 (${s.cooldown_remaining}s)`;
@@ -821,15 +839,37 @@ function updateSelectedConvPreview() {
 }
 
 // ==========================================================================
-// 日志控制台渲染
+// 日志控制台渲染与过滤
 // ==========================================================================
 function renderLogs(logs) {
   if (!consoleBody) return;
-  if (logs.length === lastLogCount) return;
-  lastLogCount = logs.length;
+  if (logs) cachedLogs = logs;
+  const rawLogs = cachedLogs || [];
+
+  // 1. 过滤日志等级
+  let filtered = rawLogs;
+  if (currentLogLevel !== 'ALL') {
+    filtered = filtered.filter(item => item.level === currentLogLevel);
+  }
+
+  // 2. 关键词检索
+  const q = currentLogSearch.trim().toLowerCase();
+  if (q) {
+    filtered = filtered.filter(item => {
+      const textMatch = (item.text || '').toLowerCase().includes(q);
+      const tagMatch = (item.level || '').toLowerCase().includes(q);
+      const tsMatch = (item.timestamp || '').includes(q);
+      return textMatch || tagMatch || tsMatch;
+    });
+  }
 
   consoleBody.innerHTML = '';
-  logs.forEach(item => {
+  if (filtered.length === 0) {
+    consoleBody.innerHTML = `<div class="log-line info"><span class="log-msg" style="color: #64748b;">(无匹配日志记录)</span></div>`;
+    return;
+  }
+
+  filtered.forEach(item => {
     const row = document.createElement('div');
     row.className = 'log-line';
 
@@ -850,6 +890,47 @@ function renderLogs(logs) {
   if (autoScrollCheckbox && autoScrollCheckbox.checked) {
     consoleBody.scrollTop = consoleBody.scrollHeight;
   }
+}
+
+function initLogConsoleToolbar() {
+  if (logSearchInput) {
+    logSearchInput.addEventListener('input', (e) => {
+      currentLogSearch = e.target.value;
+      if (clearLogSearchBtn) {
+        clearLogSearchBtn.style.display = currentLogSearch ? 'block' : 'none';
+      }
+      renderLogs();
+    });
+  }
+
+  if (clearLogSearchBtn) {
+    clearLogSearchBtn.addEventListener('click', () => {
+      if (logSearchInput) logSearchInput.value = '';
+      currentLogSearch = '';
+      clearLogSearchBtn.style.display = 'none';
+      renderLogs();
+    });
+  }
+
+  logLevelPills.forEach(pill => {
+    pill.addEventListener('click', () => {
+      logLevelPills.forEach(p => p.classList.remove('active'));
+      pill.classList.add('active');
+      currentLogLevel = pill.dataset.level || 'ALL';
+      renderLogs();
+    });
+  });
+
+  // 绑定提示词快捷药丸点击
+  document.querySelectorAll('.prompt-pill').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const val = btn.dataset.val;
+      if (promptInput && val) {
+        promptInput.value = val;
+        showToast(`已填入预设指令: ${val.slice(0, 16)}...`, '💬');
+      }
+    });
+  });
 }
 
 function escapeHtml(str) {
@@ -1354,6 +1435,7 @@ if (saveWebhookBtn) {
 // ==========================================================================
 async function initApp() {
   initFleetToolbar();
+  initLogConsoleToolbar();
   await fetchStatus();
   await fetchConversations();
   await fetchLogs();

@@ -270,10 +270,11 @@
           
           <!-- 快捷提示词药丸 -->
           <div class="prompt-pills">
-            <button class="prompt-pill" data-val="继续">继续</button>
-            <button class="prompt-pill" data-val="继续推进下一项任务">继续推进下一项任务</button>
-            <button class="prompt-pill" data-val="自测代码并验证效果">自测代码并验证效果</button>
-            <button class="prompt-pill" data-val="生成完整交付总结报告">生成完整交付总结报告</button>
+            <button type="button" class="prompt-pill" data-val="[/goal](slashCommand;goal) 继续全局开发">🚀 /goal 全局开发</button>
+            <button type="button" class="prompt-pill" data-val="[/plan](slashCommand;plan) 规划并推进下一阶段">📋 /plan 规划阶段</button>
+            <button type="button" class="prompt-pill" data-val="继续推进下一项任务">⚡ 继续推进任务</button>
+            <button type="button" class="prompt-pill" data-val="自测代码并验证效果">🧪 自测与验证</button>
+            <button type="button" class="prompt-pill" data-val="生成完整交付总结报告">📊 交付总结报告</button>
           </div>
 
           <!-- 冷却时间与轮数设置 -->
@@ -323,6 +324,22 @@
           </label>
           <button class="console-btn" id="copyLogsBtn">📋 复制日志</button>
           <button class="console-btn" id="clearLogsBtn">🗑️ 清空日志</button>
+        </div>
+      </div>
+
+      <!-- 日志过滤检索工具栏 -->
+      <div class="console-filter-toolbar">
+        <div class="console-search-box">
+          <span class="search-icon">🔍</span>
+          <input type="text" id="logSearchInput" placeholder="过滤控制台日志 (支持关键词、等级、会话ID)..." autocomplete="off">
+          <button class="clear-search-btn" id="clearLogSearchBtn" style="display: none;">✕</button>
+        </div>
+        <div class="log-level-pills" id="logLevelPills">
+          <button type="button" class="log-filter-pill active" data-level="ALL">全部</button>
+          <button type="button" class="log-filter-pill" data-level="TRIGGER">⚡ 注入</button>
+          <button type="button" class="log-filter-pill" data-level="SUCCESS">✅ 成功</button>
+          <button type="button" class="log-filter-pill" data-level="WARN">⚠️ 警告</button>
+          <button type="button" class="log-filter-pill" data-level="ERROR">❌ 错误</button>
         </div>
       </div>
 
