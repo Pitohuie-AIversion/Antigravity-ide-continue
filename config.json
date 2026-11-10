@@ -4,8 +4,8 @@
     {
       "id": "9b984826-9361-4145-85fb-75cd741ee997",
       "node_type": "local",
-      "title": "默认迁移会话",
-      "prompt": "[/goal](slashCommand;goal) 继续开发",
+      "title": "/goal 继续无止境开发",
+      "prompt": "继续推进下一项任务",
       "cooldown": 3.0,
       "max_turns": 9999,
       "enabled": true
@@ -30,7 +30,7 @@
     }
   ],
   "target_conversation_id": "9b984826-9361-4145-85fb-75cd741ee997",
-  "continue_prompt": "[/goal](slashCommand;goal) 继续开发",
+  "continue_prompt": "继续推进下一项任务",
   "idle_delay_seconds": 3.0,
   "max_turns": 9999
 }

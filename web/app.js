@@ -51,6 +51,7 @@ const nodeBtnLocal = document.getElementById('nodeBtnLocal');
 const nodeBtnWestc = document.getElementById('nodeBtnWestc');
 
 const convSelect = document.getElementById('convSelect');
+const convSearchInput = document.getElementById('convSearchInput');
 const convPreviewSnippet = document.getElementById('convPreviewSnippet');
 const convCountHint = document.getElementById('convCountHint');
 const refreshConvsBtn = document.getElementById('refreshConvsBtn');
@@ -478,17 +479,30 @@ function renderConversationsDropdown() {
   }
 
   const hideEmpty = hideEmptyCheckbox ? hideEmptyCheckbox.checked : true;
-  const filtered = hideEmpty
+  let filtered = hideEmpty
     ? conversationsList.filter(c => !c.is_empty && c.step_count > 0)
     : conversationsList;
 
-  const displayList = filtered.length > 0 ? filtered : conversationsList;
+  const searchQuery = convSearchInput ? convSearchInput.value.trim().toLowerCase() : '';
+  if (searchQuery) {
+    filtered = filtered.filter(c => {
+      const idMatch = c.id.toLowerCase().includes(searchQuery);
+      const prevMatch = (c.preview || '').toLowerCase().includes(searchQuery);
+      return idMatch || prevMatch;
+    });
+  }
+
+  const displayList = filtered;
   const emptyCount = conversationsList.filter(c => c.is_empty || c.step_count === 0).length;
 
   if (convCountHint) {
-    convCountHint.innerText = hideEmpty 
-      ? `已显示 ${displayList.length} 个有记录会话 (已过滤 ${emptyCount} 个空白会话)` 
-      : `已扫描全部 ${conversationsList.length} 个会话 (含 ${emptyCount} 个空白会话)`;
+    if (searchQuery) {
+      convCountHint.innerText = `搜索匹配到 ${displayList.length} 个会话 (关键词: "${searchQuery}")`;
+    } else {
+      convCountHint.innerText = hideEmpty 
+        ? `已显示 ${displayList.length} 个有记录会话 (已过滤 ${emptyCount} 个空白会话)` 
+        : `已扫描全部 ${conversationsList.length} 个会话 (含 ${emptyCount} 个空白会话)`;
+    }
   }
 
   displayList.forEach((c) => {
@@ -709,6 +723,10 @@ document.querySelectorAll('.prompt-pill').forEach(pill => {
 
 if (convSelect) {
   convSelect.addEventListener('change', updateSelectedConvPreview);
+}
+
+if (convSearchInput) {
+  convSearchInput.addEventListener('input', renderConversationsDropdown);
 }
 
 if (refreshConvsBtn) {

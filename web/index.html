@@ -183,6 +183,9 @@
             <span>🎯 待纳管会话 (Select Conversation to Enroll)</span>
             <span class="config-hint" id="convCountHint">已扫描 0 个活跃对话</span>
           </label>
+          <div class="search-filter-wrap" style="margin-bottom: 8px;">
+            <input type="text" class="custom-input" id="convSearchInput" placeholder="🔍 实时搜索会话标题、关键词或 ID..." style="padding: 7px 12px; font-size: 12px; background: rgba(0, 0, 0, 0.35); border-color: rgba(255, 255, 255, 0.12);">
+          </div>
           <div class="select-wrapper">
             <select class="custom-select" id="convSelect">
               <option value="">正在扫描 Antigravity 会话列表...</option>
@@ -287,8 +290,8 @@
     <!-- 底部快捷工具与外部导航 -->
     <footer class="app-footer">
       <div class="footer-links">
-        <a href="http://localhost:5218/preview.html" target="_blank" class="footer-link">
-          <span>🌐</span> 打开微光账单 Web 预览 (5218)
+        <a href="http://localhost:8092/preview.html?v=v58systems" target="_blank" class="footer-link">
+          <span>🌐</span> 打开微光账单 Web 预览 (8092)
         </a>
         <span class="footer-sep">·</span>
         <button class="footer-link-btn" id="quickTestLspBtn">
