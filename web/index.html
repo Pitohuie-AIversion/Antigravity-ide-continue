@@ -456,11 +456,31 @@
         <div class="modal-title">
           <span>📜</span> <span id="transcriptModalTitle">会话最新执行进展回溯</span>
         </div>
-        <div style="display: flex; gap: 8px; align-items: center;">
+        <div style="display: flex; gap: 10px; align-items: center;">
+          <label class="custom-checkbox" style="font-size: 12px; margin-bottom: 0;" title="每隔 3 秒自动轮询该会话的最新步骤事件">
+            <input type="checkbox" id="transcriptLiveCheckbox" checked>
+            <span class="checkmark"></span>
+            <span>实时轮询</span>
+          </label>
           <button class="btn-card-action" id="refreshTranscriptBtn" style="padding: 4px 10px; font-size: 12px;">🔄 刷新</button>
           <button class="modal-close-btn" id="closeTranscriptModalBtn">✕</button>
         </div>
       </div>
+
+      <!-- 转录内容筛选工具栏 -->
+      <div class="transcript-toolbar">
+        <div class="transcript-search-box">
+          <span style="font-size: 11px; opacity: 0.5; margin-right: 6px;">🔍</span>
+          <input type="text" id="transcriptSearchInput" placeholder="检索步骤输出或工具调用..." autocomplete="off">
+        </div>
+        <div class="tr-pills" id="transcriptFilterPills">
+          <button type="button" class="tr-pill active" data-tr="ALL">全部步骤</button>
+          <button type="button" class="tr-pill" data-tr="MODEL">🤖 模型回复</button>
+          <button type="button" class="tr-pill" data-tr="TOOL">🛠️ 工具调用</button>
+          <button type="button" class="tr-pill" data-tr="USER">👤 指令注入</button>
+        </div>
+      </div>
+
       <div class="modal-body" style="max-height: 60vh; overflow-y: auto; padding: 18px 22px;">
         <div class="timeline-container" id="transcriptTimeline">
           <!-- 动态步骤渲染区 -->

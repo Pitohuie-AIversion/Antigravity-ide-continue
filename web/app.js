@@ -920,59 +920,155 @@ window.handleCardRemove = async function(cid) {
 // ==========================================================================
 // 会话转录时光轴交互逻辑 (Transcript Inspector Modal)
 // ==========================================================================
+let transcriptLiveTimer = null;
+let currentTranscriptFilter = 'ALL';
+let currentTranscriptSearch = '';
+
+const transcriptLiveCheckbox = document.getElementById('transcriptLiveCheckbox');
+const transcriptSearchInput = document.getElementById('transcriptSearchInput');
+const transcriptFilterPills = document.getElementById('transcriptFilterPills');
+
+function stopTranscriptLiveTimer() {
+  if (transcriptLiveTimer) {
+    clearInterval(transcriptLiveTimer);
+    transcriptLiveTimer = null;
+  }
+}
+
+function startTranscriptLiveTimer() {
+  stopTranscriptLiveTimer();
+  if (transcriptLiveCheckbox && transcriptLiveCheckbox.checked && transcriptModal && transcriptModal.style.display !== 'none') {
+    transcriptLiveTimer = setInterval(() => {
+      loadTranscriptTimeline(true);
+    }, 3000);
+  }
+}
+
+function closeTranscriptModal() {
+  if (transcriptModal) transcriptModal.style.display = 'none';
+  stopTranscriptLiveTimer();
+}
+
 window.handleCardTranscript = async function(cid, node) {
   currentTranscriptConv = { id: cid, node: node || 'local' };
   const s = appState.sessions.find(item => item.id === cid);
   const title = s ? s.title : cid.slice(0, 8);
   if (transcriptModalTitle) transcriptModalTitle.textContent = `[${title.slice(0, 24)}] 最新执行进展回溯`;
   if (transcriptModal) transcriptModal.style.display = 'flex';
+  currentTranscriptSearch = '';
+  if (transcriptSearchInput) transcriptSearchInput.value = '';
   await loadTranscriptTimeline();
+  startTranscriptLiveTimer();
 };
 
-async function loadTranscriptTimeline() {
+function renderTranscriptCards() {
+  if (!transcriptTimeline) return;
+  if (!transcriptCache || transcriptCache.length === 0) {
+    transcriptTimeline.innerHTML = '<div class="timeline-empty">🌱 暂无步骤记录或转录文件为空</div>';
+    return;
+  }
+
+  const query = currentTranscriptSearch.trim().toLowerCase();
+  const filtered = transcriptCache.filter(st => {
+    // 1. Filter by category
+    const isUser = st.type === 'USER_INPUT' || st.source === 'USER_EXPLICIT';
+    const hasTools = st.tool_calls && st.tool_calls.length > 0;
+    if (currentTranscriptFilter === 'USER' && !isUser) return false;
+    if (currentTranscriptFilter === 'TOOL' && !hasTools) return false;
+    if (currentTranscriptFilter === 'MODEL' && (isUser || hasTools)) return false;
+
+    // 2. Filter by search query
+    if (query) {
+      const contentMatch = (st.content || '').toLowerCase().includes(query);
+      const toolsMatch = (st.tool_calls || []).some(t => t.toLowerCase().includes(query));
+      const typeMatch = (st.type || '').toLowerCase().includes(query);
+      if (!contentMatch && !toolsMatch && !typeMatch) return false;
+    }
+    return true;
+  });
+
+  if (filtered.length === 0) {
+    transcriptTimeline.innerHTML = '<div class="timeline-empty">🔍 未找到匹配该条件的步骤事件</div>';
+    return;
+  }
+
+  transcriptTimeline.innerHTML = '';
+  filtered.forEach(st => {
+    const card = document.createElement('div');
+    const isUser = st.type === 'USER_INPUT' || st.source === 'USER_EXPLICIT';
+    const hasTools = st.tool_calls && st.tool_calls.length > 0;
+    card.className = `timeline-step-card ${isUser ? 'user' : (hasTools ? 'tool' : 'model')}`;
+
+    let toolsHtml = '';
+    if (hasTools) {
+      toolsHtml = `<div class="timeline-tool-tags">` +
+        st.tool_calls.map(t => `<span class="timeline-tool-tag">🛠️ ${escapeHtml(t)}</span>`).join('') +
+        `</div>`;
+    }
+
+    card.innerHTML = `
+      <div class="timeline-step-header">
+        <span class="timeline-step-index">Step ${st.step_index >= 0 ? st.step_index : '--'}</span>
+        <span class="timeline-step-type">${isUser ? '👤 用户 / 注入指令' : (hasTools ? '⚡ 工具调用中' : '🤖 AI 规划与回答')} [${escapeHtml(st.status || 'DONE')}]</span>
+      </div>
+      ${toolsHtml}
+      <div class="timeline-step-content">${escapeHtml(st.content || '(无文字输出)')}</div>
+    `;
+    transcriptTimeline.appendChild(card);
+  });
+}
+
+async function loadTranscriptTimeline(isBackgroundPoll = false) {
   if (!transcriptTimeline || !currentTranscriptConv.id) return;
-  transcriptTimeline.innerHTML = '<div class="timeline-empty">⏳ 正在同步最新会话转录...</div>';
+  if (!isBackgroundPoll) {
+    transcriptTimeline.innerHTML = '<div class="timeline-empty">⏳ 正在同步最新会话转录...</div>';
+  }
   try {
-    const url = `/api/sessions/transcript?conv_id=${encodeURIComponent(currentTranscriptConv.id)}&node=${encodeURIComponent(currentTranscriptConv.node)}&limit=15`;
+    const url = `/api/sessions/transcript?conv_id=${encodeURIComponent(currentTranscriptConv.id)}&node=${encodeURIComponent(currentTranscriptConv.node)}&limit=25`;
     const res = await safeFetch(url);
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const data = await res.json();
     transcriptCache = data.steps || [];
+    renderTranscriptCards();
 
-    if (transcriptCache.length === 0) {
-      transcriptTimeline.innerHTML = '<div class="timeline-empty">🌱 暂无步骤记录或转录文件为空</div>';
-      return;
+    if (!isBackgroundPoll) {
+      transcriptTimeline.parentElement.scrollTop = transcriptTimeline.parentElement.scrollHeight;
     }
-
-    transcriptTimeline.innerHTML = '';
-    transcriptCache.forEach(st => {
-      const card = document.createElement('div');
-      const isUser = st.type === 'USER_INPUT' || st.source === 'USER_EXPLICIT';
-      const hasTools = st.tool_calls && st.tool_calls.length > 0;
-      card.className = `timeline-step-card ${isUser ? 'user' : (hasTools ? 'tool' : 'model')}`;
-
-      let toolsHtml = '';
-      if (hasTools) {
-        toolsHtml = `<div class="timeline-tool-tags">` +
-          st.tool_calls.map(t => `<span class="timeline-tool-tag">🛠️ ${escapeHtml(t)}</span>`).join('') +
-          `</div>`;
-      }
-
-      card.innerHTML = `
-        <div class="timeline-step-header">
-          <span class="timeline-step-index">Step ${st.step_index >= 0 ? st.step_index : '--'}</span>
-          <span class="timeline-step-type">${isUser ? '👤 用户 / 注入指令' : (hasTools ? '⚡ 工具调用中' : '🤖 AI 规划与回答')} [${escapeHtml(st.status || 'DONE')}]</span>
-        </div>
-        ${toolsHtml}
-        <div class="timeline-step-content">${escapeHtml(st.content || '(无文字输出)')}</div>
-      `;
-      transcriptTimeline.appendChild(card);
-    });
-
-    transcriptTimeline.parentElement.scrollTop = transcriptTimeline.parentElement.scrollHeight;
   } catch (err) {
-    transcriptTimeline.innerHTML = `<div class="timeline-empty" style="color: #f43f5e;">同步转录失败: ${escapeHtml(err.message)}</div>`;
+    if (!isBackgroundPoll) {
+      transcriptTimeline.innerHTML = `<div class="timeline-empty" style="color: #f43f5e;">同步转录失败: ${escapeHtml(err.message)}</div>`;
+    }
   }
+}
+
+if (transcriptLiveCheckbox) {
+  transcriptLiveCheckbox.addEventListener('change', () => {
+    if (transcriptLiveCheckbox.checked) {
+      startTranscriptLiveTimer();
+      showToast('已开启会话转录实时轮询 (3s)', '🟢');
+    } else {
+      stopTranscriptLiveTimer();
+      showToast('已暂停会话转录实时轮询', '⏸️');
+    }
+  });
+}
+
+if (transcriptSearchInput) {
+  transcriptSearchInput.addEventListener('input', (e) => {
+    currentTranscriptSearch = e.target.value;
+    renderTranscriptCards();
+  });
+}
+
+if (transcriptFilterPills) {
+  transcriptFilterPills.addEventListener('click', (e) => {
+    const pill = e.target.closest('.tr-pill');
+    if (!pill) return;
+    transcriptFilterPills.querySelectorAll('.tr-pill').forEach(p => p.classList.remove('active'));
+    pill.classList.add('active');
+    currentTranscriptFilter = pill.getAttribute('data-tr') || 'ALL';
+    renderTranscriptCards();
+  });
 }
 
 if (refreshTranscriptBtn) {
@@ -982,22 +1078,18 @@ if (refreshTranscriptBtn) {
   });
 }
 
-if (closeTranscriptModalBtn && transcriptModal) {
-  closeTranscriptModalBtn.addEventListener('click', () => {
-    transcriptModal.style.display = 'none';
-  });
+if (closeTranscriptModalBtn) {
+  closeTranscriptModalBtn.addEventListener('click', closeTranscriptModal);
 }
 
-if (closeTranscriptFooterBtn && transcriptModal) {
-  closeTranscriptFooterBtn.addEventListener('click', () => {
-    transcriptModal.style.display = 'none';
-  });
+if (closeTranscriptFooterBtn) {
+  closeTranscriptFooterBtn.addEventListener('click', closeTranscriptModal);
 }
 
 if (transcriptModal) {
   transcriptModal.addEventListener('click', (e) => {
     if (e.target === transcriptModal) {
-      transcriptModal.style.display = 'none';
+      closeTranscriptModal();
     }
   });
 }
