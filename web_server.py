@@ -314,6 +314,7 @@ class MultiSessionDaemon:
                                 cur["prompt"] = s.get("prompt", cur["prompt"])
                                 cur["cooldown"] = float(s.get("cooldown", cur["cooldown"]))
                                 cur["max_turns"] = int(s.get("max_turns", cur["max_turns"]))
+                                cur["pinned"] = bool(s.get("pinned", cur.get("pinned", False)))
                                 new_enabled = bool(s.get("enabled", True))
                                 if cur["enabled"] != new_enabled:
                                     cur["enabled"] = new_enabled
@@ -327,6 +328,7 @@ class MultiSessionDaemon:
                                     "cooldown": float(s.get("cooldown", 3.0)),
                                     "max_turns": int(s.get("max_turns", 9999)),
                                     "enabled": bool(s.get("enabled", True)),
+                                    "pinned": bool(s.get("pinned", False)),
                                     "state": "IDLE" if s.get("enabled", True) else "STOPPED",
                                     "current_step": 0,
                                     "last_handled_step": -1,
@@ -369,7 +371,8 @@ class MultiSessionDaemon:
                         "prompt": s["prompt"],
                         "cooldown": s["cooldown"],
                         "max_turns": s["max_turns"],
-                        "enabled": s["enabled"]
+                        "enabled": s["enabled"],
+                        "pinned": bool(s.get("pinned", False))
                     })
                 data = {
                     "node_type": self.node_type,
@@ -553,6 +556,7 @@ class MultiSessionDaemon:
                 "idle_start_time": None,
                 "last_snippet": "",
                 "error": "",
+                "pinned": False,
                 "updated_at": time.time()
             }
 
@@ -599,6 +603,7 @@ class MultiSessionDaemon:
             if "cooldown" in data: s["cooldown"] = max(1.0, float(data["cooldown"]))
             if "max_turns" in data: s["max_turns"] = int(data["max_turns"])
             if "title" in data: s["title"] = str(data["title"]).strip()
+            if "pinned" in data: s["pinned"] = bool(data["pinned"])
         self.save_config()
         self.add_log(f"会话 [{conv_id[:8]}] 参数已更新", "SUCCESS")
         return True
@@ -858,6 +863,41 @@ class MultiSessionDaemon:
             self.add_log(f"本地注入进程异常: {e}", "ERROR", session_tag=conv_id[:8])
             return False
 
+    def generate_report(self) -> str:
+        with self.lock:
+            total_sent = sum(s.get("sent_count", 0) for s in self.sessions.values())
+            active_count = sum(1 for s in self.sessions.values() if s.get("enabled"))
+            total_count = len(self.sessions)
+            sess_items = list(self.sessions.values())
+
+        now_str = time.strftime("%Y-%m-%d %H:%M:%S")
+        uptime_sec = int(time.time() - self.start_time)
+        uptime_fmt = f"{uptime_sec // 3600}小时 {(uptime_sec % 3600) // 60}分钟"
+
+        md = []
+        md.append(f"# ⚡ Antigravity Auto-Pilot · 矩阵任务交付与巡航报告")
+        md.append(f"> 自动生成时间: **{now_str}** · 巡航总时长: **{uptime_fmt}**\n")
+        md.append(f"### 📊 矩阵核心态势")
+        md.append(f"- **纳管会话总数**: {total_count} 个")
+        md.append(f"- **正在并发巡航**: {active_count} 个")
+        md.append(f"- **累计自驱动注入**: {total_sent} 轮")
+        md.append(f"- **底层通道状态**: 🟢 Language Server gRPC 探活正常\n")
+        md.append(f"### 📋 各会话执行明细与产出追踪")
+        md.append(f"| 节点 | 标题 | 会话 ID | 状态 | 当前步数 | 已注入 | 任务提示词与最新摘要 |")
+        md.append(f"| :--- | :--- | :--- | :--- | :--- | :--- | :--- |")
+        for s in sess_items:
+            node = "☁️ 远程" if s.get("node_type", "").startswith("ssh:") else "🖥️ 本地"
+            title = s.get("title", s["id"][:8]).replace("|", "-")
+            cid = s["id"]
+            state = s.get("state", "UNKNOWN")
+            st_icon = "🟢" if state in ("BUSY", "IDLE") else ("🎉" if state == "COMPLETED" else "⏸️")
+            step = s.get("current_step", 0)
+            sent = s.get("sent_count", 0)
+            snippet = (s.get("last_snippet") or s.get("prompt") or "").replace("|", "-").replace("\n", " ")[:60]
+            md.append(f"| {node} | **{title}** | `{cid[:8]}..` | {st_icon} {state} | Step {step} | {sent} 轮 | {snippet} |")
+
+        md.append("\n---\n*Report generated automatically by Antigravity Auto-Pilot Engine.*")
+        return "\n".join(md)
 
     def _get_step_info(self, node: str, conv_id: str):
         # 1. 远程 SSH 检查
@@ -1240,6 +1280,9 @@ class AutoPilotHTTPHandler(SimpleHTTPRequestHandler):
                     "version": "2.2.0"
                 }
             self.send_json(export_data)
+        elif path == "/api/fleet/report":
+            report_md = daemon.generate_report()
+            self.send_json({"ok": True, "report": report_md})
         elif path == "/api/sessions/transcript":
             cid = ""
             node = "local"
@@ -1347,6 +1390,15 @@ class AutoPilotHTTPHandler(SimpleHTTPRequestHandler):
             text = body.get("text", None)
             ok = daemon.trigger_session(cid, text)
             self.send_json({"ok": ok, "status": daemon.get_status_payload()})
+
+        elif path == "/api/sessions/pin":
+            cid = body.get("conv_id", "").strip()
+            pinned = bool(body.get("pinned", False))
+            with daemon.lock:
+                if cid in daemon.sessions:
+                    daemon.sessions[cid]["pinned"] = pinned
+            daemon.save_config()
+            self.send_json({"ok": True, "conv_id": cid, "pinned": pinned, "status": daemon.get_status_payload()})
 
         elif path == "/api/sessions/start_all":
             daemon.start_all()

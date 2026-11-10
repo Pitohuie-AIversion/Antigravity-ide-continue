@@ -150,6 +150,7 @@
           <button class="btn-pill-action" id="toggleNotifBtn" title="切换操作系统桌面弹窗通知">🔔 桌面通知: 关</button>
           <button class="btn-pill-action" id="openStrategyModalBtn" title="配置智能重试退避与自动嗅探">⚙️ 策略设置</button>
           <button class="btn-pill-action" id="openBackupModalBtn">💾 备份/导入</button>
+          <button class="btn-pill-action" id="openReportModalBtn" title="查看并复制全矩阵 Markdown 交付总结报告">📊 交付报告</button>
           <a href="/preview" target="_blank" class="btn-pill-action" id="openPreviewBtn" style="color: #38bdf8; border-color: rgba(56, 189, 248, 0.35);">📱 微光账单仿真</a>
           <button class="btn-pill-action" id="openWebhookModalBtn">🔔 告警推送</button>
           <button class="btn-pill-action" id="toggleTelemetryBtn">📈 效能图表</button>
@@ -588,6 +589,31 @@
       <div class="modal-footer" style="display: flex; justify-content: flex-end; gap: 10px; padding: 12px 20px; border-top: 1px solid var(--border-subtle);">
         <button class="btn-card-action" id="cancelStrategyModalBtn">取消</button>
         <button class="btn-card-action primary" id="saveStrategyModalBtn">💾 保存生效</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 📊 全矩阵任务交付与巡航报告弹窗 (Report Modal) -->
+  <div class="modal-overlay" id="reportModal" style="display: none;">
+    <div class="modal-box modal-large" style="max-width: 780px;">
+      <div class="modal-header">
+        <div class="modal-title">
+          <span>📊</span> <span>全矩阵任务交付与巡航报告</span>
+        </div>
+        <div style="display: flex; gap: 8px; align-items: center;">
+          <button class="btn-card-action" id="refreshReportBtn" style="padding: 4px 10px; font-size: 12px;">🔄 刷新</button>
+          <button class="modal-close-btn" id="closeReportModalBtn">✕</button>
+        </div>
+      </div>
+      <div class="modal-body" style="padding: 20px; max-height: 60vh; overflow-y: auto;">
+        <pre id="reportMarkdownPre" style="background: rgba(0, 0, 0, 0.45); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 8px; padding: 16px; font-family: var(--font-mono); font-size: 12px; color: var(--text-main); white-space: pre-wrap; line-height: 1.6; user-select: text;"></pre>
+      </div>
+      <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center; padding: 12px 20px; border-top: 1px solid var(--border-subtle);">
+        <span style="font-size: 11px; color: var(--text-dim);">可直接复制 Markdown 粘贴至工作汇报、周报或 PR 描述</span>
+        <div style="display: flex; gap: 10px;">
+          <button class="btn-card-action" id="downloadReportBtn">⬇️ 导出 .md 文件</button>
+          <button class="btn-card-action primary" id="copyReportBtn">📋 复制 Markdown 报告</button>
+        </div>
       </div>
     </div>
   </div>

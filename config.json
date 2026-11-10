@@ -26,7 +26,7 @@
       "prompt": "[/goal](slashCommand;goal) 继续全局开发",
       "cooldown": 3.0,
       "max_turns": 9999,
-      "enabled": true
+      "enabled": false
     },
     {
       "id": "dcd67e14-92ae-4864-866e-c35abc6e66f1",
@@ -53,6 +53,8 @@
   "strategy": {
     "smart_backoff": true,
     "auto_archive_completed": false,
+    "auto_adopt_sessions": false,
+    "stall_alert_seconds": 300,
     "max_parallel_workers": 6
   }
 }

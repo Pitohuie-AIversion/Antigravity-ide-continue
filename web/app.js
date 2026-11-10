@@ -397,7 +397,7 @@ function renderFleetMatrix(sessions) {
     filtered = filtered.filter(s => s.node_type && s.node_type.startsWith('ssh:'));
   }
 
-  // 3. 排序
+  // 3. 排序 (置顶优先)
   if (currentFleetSort === 'step') {
     filtered.sort((a, b) => (b.current_step || 0) - (a.current_step || 0));
   } else if (currentFleetSort === 'name') {
@@ -405,6 +405,7 @@ function renderFleetMatrix(sessions) {
   } else {
     filtered.sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
   }
+  filtered.sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0));
 
   if (filtered.length === 0) {
     fleetGrid.innerHTML = `
@@ -465,7 +466,7 @@ function renderFleetMatrix(sessions) {
     }
 
     const card = document.createElement('div');
-    card.className = `fleet-card ${cardStateClass}`;
+    card.className = `fleet-card ${cardStateClass} ${s.pinned ? 'pinned' : ''}`;
     card.id = `card-${s.id}`;
 
     // 冷却倒计时条
@@ -489,14 +490,18 @@ function renderFleetMatrix(sessions) {
           ${s.node_type.startsWith('ssh:') ? `<span class="node-ping-badge" onclick="pingSshNode('${escapeHtml(s.node_type)}', this)" title="点击测试远程 SSH 连通性与网络延迟">⚡ 测速</span>` : ''}
           <span class="conv-id-chip" title="点击复制完整会话ID" onclick="copyText('${s.id}')">${s.id.slice(0, 8)}...</span>
         </div>
-        <label class="fleet-switch" title="开启/暂停该会话自驱巡航">
-          <input type="checkbox" class="session-toggle" data-cid="${s.id}" ${s.enabled ? 'checked' : ''}>
-          <span class="fleet-slider"></span>
-        </label>
+        <div style="display: flex; gap: 8px; align-items: center;">
+          <button class="pin-btn ${s.pinned ? 'pinned' : ''}" onclick="toggleSessionPin('${s.id}', ${!s.pinned})" title="${s.pinned ? '取消置顶' : '置顶此会话'}">📌</button>
+          <label class="fleet-switch" title="开启/暂停该会话自驱巡航">
+            <input type="checkbox" class="session-toggle" data-cid="${s.id}" ${s.enabled ? 'checked' : ''}>
+            <span class="fleet-slider"></span>
+          </label>
+        </div>
       </div>
 
       <div class="fleet-card-title" title="${escapeHtml(s.title)}">
-        ${escapeHtml(s.title)}
+        <span class="title-text">${escapeHtml(s.title)}</span>
+        <button class="btn-rename" onclick="handleInlineRename('${s.id}', '${escapeHtml(s.title)}')" title="重命名会话">✏️</button>
       </div>
 
       <div class="fleet-card-status-row">
@@ -530,6 +535,9 @@ function renderFleetMatrix(sessions) {
       <div class="fleet-card-actions">
         <button class="btn-card-action" onclick="handleCardTranscript('${s.id}', '${s.node_type}')" title="查看该会话最新步骤与转录回溯">
           📜 进展
+        </button>
+        <button class="btn-card-action" onclick="handleCardClone('${s.id}')" title="克隆该会话参数至新建表单">
+          📑 克隆
         </button>
         <button class="btn-card-action primary" onclick="handleCardTrigger('${s.id}')" title="立即向该会话发送一次指令">
           ⚡ 立即注入
@@ -1014,6 +1022,131 @@ function initStrategyModal() {
 }
 
 // 卡片交互快捷处理
+window.toggleSessionPin = async function(cid, pinned) {
+  try {
+    const res = await safeFetch('/api/sessions/pin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ conv_id: cid, pinned })
+    });
+    const data = await res.json();
+    if (data.ok) {
+      showToast(pinned ? '已将该会话置顶' : '已取消会话置顶', '📌');
+      fetchStatus();
+    }
+  } catch (err) {
+    showToast('置顶操作失败: ' + err.message, '⚠️');
+  }
+};
+
+window.handleInlineRename = async function(cid, currentTitle) {
+  const newTitle = prompt('请输入会话新名称:', currentTitle || '');
+  if (newTitle === null || !newTitle.trim()) return;
+  try {
+    const res = await safeFetch('/api/sessions/update', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ conv_id: cid, title: newTitle.trim() })
+    });
+    const data = await res.json();
+    if (data.ok) {
+      showToast('会话名称已更新', '✏️');
+      fetchStatus();
+    }
+  } catch (err) {
+    showToast('重命名失败: ' + err.message, '⚠️');
+  }
+};
+
+window.handleCardClone = function(cid) {
+  const s = appState.sessions.find(item => item.id === cid);
+  if (!s) return;
+  const promptInput = document.getElementById('enrollPromptInput');
+  const cooldownInput = document.getElementById('enrollCooldownInput');
+  const maxTurnsInput = document.getElementById('enrollMaxTurnsInput');
+  if (promptInput) promptInput.value = s.prompt || '';
+  if (cooldownInput) cooldownInput.value = s.cooldown || 3.0;
+  if (maxTurnsInput) maxTurnsInput.value = s.max_turns || 9999;
+  showToast(`已克隆会话 [${s.title}] 配置参数至纳管表单`, '📑');
+  const enrollSec = document.getElementById('enrollSection');
+  if (enrollSec) enrollSec.scrollIntoView({ behavior: 'smooth' });
+};
+
+function initReportModal() {
+  const openReportModalBtn = document.getElementById('openReportModalBtn');
+  const closeReportModalBtn = document.getElementById('closeReportModalBtn');
+  const reportModal = document.getElementById('reportModal');
+  const refreshReportBtn = document.getElementById('refreshReportBtn');
+  const downloadReportBtn = document.getElementById('downloadReportBtn');
+  const copyReportBtn = document.getElementById('copyReportBtn');
+  const reportMarkdownPre = document.getElementById('reportMarkdownPre');
+
+  let currentReportText = '';
+
+  async function loadReport() {
+    if (!reportMarkdownPre) return;
+    reportMarkdownPre.textContent = '⏳ 正在聚合生成最新全矩阵交付报告...';
+    try {
+      const res = await safeFetch('/api/fleet/report');
+      const data = await res.json();
+      if (data.ok) {
+        currentReportText = data.report || '';
+        reportMarkdownPre.textContent = currentReportText;
+      } else {
+        reportMarkdownPre.textContent = '❌ 生成报告失败: ' + (data.error || '未知异常');
+      }
+    } catch (err) {
+      reportMarkdownPre.textContent = '⚠️ 网络异常: ' + err.message;
+    }
+  }
+
+  if (openReportModalBtn && reportModal) {
+    openReportModalBtn.addEventListener('click', () => {
+      reportModal.style.display = 'flex';
+      loadReport();
+    });
+  }
+
+  function closeReport() {
+    if (reportModal) reportModal.style.display = 'none';
+  }
+
+  if (closeReportModalBtn) closeReportModalBtn.addEventListener('click', closeReport);
+  if (reportModal) {
+    reportModal.addEventListener('click', (e) => {
+      if (e.target === reportModal) closeReport();
+    });
+  }
+  if (refreshReportBtn) {
+    refreshReportBtn.addEventListener('click', () => {
+      showToast('正在重新汇总全矩阵报告...', '🔄');
+      loadReport();
+    });
+  }
+  if (copyReportBtn) {
+    copyReportBtn.addEventListener('click', () => {
+      if (!currentReportText) return;
+      navigator.clipboard.writeText(currentReportText).then(() => {
+        showToast('已复制完整 Markdown 交付报告！', '📋');
+      });
+    });
+  }
+  if (downloadReportBtn) {
+    downloadReportBtn.addEventListener('click', () => {
+      if (!currentReportText) return;
+      const blob = new Blob([currentReportText], { type: 'text/markdown;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const ts = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+      a.href = url;
+      a.download = `Antigravity_Fleet_Report_${ts}.md`;
+      a.click();
+      URL.revokeObjectURL(url);
+      showToast('已下载交付总结报告', '⬇️');
+    });
+  }
+}
+
 window.copyText = function(text) {
   navigator.clipboard.writeText(text).then(() => {
     showToast(`已复制会话 ID: ${text.slice(0, 12)}...`, '📋');
@@ -1945,6 +2078,7 @@ async function initApp() {
   initBackupRestoreModal();
   initNotifications();
   initStrategyModal();
+  initReportModal();
   await fetchStatus();
   await fetchConversations();
   await fetchLogs();

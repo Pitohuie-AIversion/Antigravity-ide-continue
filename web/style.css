@@ -2230,6 +2230,54 @@ body {
   transform: translateY(-1px);
 }
 
+.fleet-card.pinned {
+  border-color: rgba(234, 179, 8, 0.45);
+  box-shadow: 0 0 16px rgba(234, 179, 8, 0.08);
+}
+
+.pin-btn {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 13px;
+  opacity: 0.4;
+  padding: 2px 4px;
+  border-radius: 4px;
+  transition: all 0.2s ease;
+  line-height: 1;
+}
+
+.pin-btn:hover {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.08);
+  transform: scale(1.15);
+}
+
+.pin-btn.pinned {
+  opacity: 1;
+  filter: drop-shadow(0 0 4px rgba(234, 179, 8, 0.6));
+}
+
+.btn-rename {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 11px;
+  opacity: 0;
+  margin-left: 6px;
+  transition: opacity 0.2s;
+  color: var(--text-dim);
+}
+
+.fleet-card-title:hover .btn-rename {
+  opacity: 0.8;
+}
+
+.btn-rename:hover {
+  opacity: 1;
+  color: var(--primary-cyan);
+}
+
 
 
 
