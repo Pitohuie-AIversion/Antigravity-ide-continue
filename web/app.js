@@ -80,6 +80,28 @@ let currentFleetFilter = 'all';
 let currentFleetSearch = '';
 let currentFleetSort = 'activity';
 
+// Batch Operations & Multi-Select
+const selectAllCheckbox = document.getElementById('selectAllCheckbox');
+const fleetBatchBar = document.getElementById('fleetBatchBar');
+const batchSelectedCount = document.getElementById('batchSelectedCount');
+const batchStartBtn = document.getElementById('batchStartBtn');
+const batchStopBtn = document.getElementById('batchStopBtn');
+const batchEditBtn = document.getElementById('batchEditBtn');
+const batchRemoveBtn = document.getElementById('batchRemoveBtn');
+const batchClearBtn = document.getElementById('batchClearBtn');
+
+// Backup & Restore Elements
+const openBackupModalBtn = document.getElementById('openBackupModalBtn');
+const closeBackupModalBtn = document.getElementById('closeBackupModalBtn');
+const backupModal = document.getElementById('backupModal');
+const downloadBackupBtn = document.getElementById('downloadBackupBtn');
+const importConfigTextarea = document.getElementById('importConfigTextarea');
+const chooseImportFileBtn = document.getElementById('chooseImportFileBtn');
+const importConfigFile = document.getElementById('importConfigFile');
+const submitImportBtn = document.getElementById('submitImportBtn');
+
+let selectedSessionIds = new Set();
+
 const consoleBody = document.getElementById('consoleBody');
 const autoScrollCheckbox = document.getElementById('autoScrollCheckbox');
 const copyLogsBtn = document.getElementById('copyLogsBtn');
@@ -447,6 +469,9 @@ function renderFleetMatrix(sessions) {
     card.innerHTML = `
       <div class="fleet-card-header">
         <div class="fleet-card-tags">
+          <label class="fleet-card-select-wrap" title="选择此会话进行批量控制">
+            <input type="checkbox" class="card-select-checkbox" data-cid="${s.id}" ${selectedSessionIds.has(s.id) ? 'checked' : ''}>
+          </label>
           <span class="node-chip ${nodeClass}">${nodeLabel}</span>
           <span class="conv-id-chip" title="点击复制完整会话ID" onclick="copyText('${s.id}')">${s.id.slice(0, 8)}...</span>
         </div>
@@ -507,6 +532,19 @@ function renderFleetMatrix(sessions) {
     fleetGrid.appendChild(card);
   });
 
+  // 绑定卡片复选框事件
+  fleetGrid.querySelectorAll('.card-select-checkbox').forEach(chk => {
+    chk.addEventListener('change', (e) => {
+      const cid = e.target.dataset.cid;
+      if (e.target.checked) {
+        selectedSessionIds.add(cid);
+      } else {
+        selectedSessionIds.delete(cid);
+      }
+      updateBatchBar();
+    });
+  });
+
   // 绑定开关事件
   fleetGrid.querySelectorAll('.session-toggle').forEach(input => {
     input.addEventListener('change', async (e) => {
@@ -525,6 +563,23 @@ function renderFleetMatrix(sessions) {
       }
     });
   });
+
+  updateBatchBar();
+}
+
+function updateBatchBar() {
+  if (!fleetBatchBar || !batchSelectedCount) return;
+  const count = selectedSessionIds.size;
+  if (count > 0) {
+    fleetBatchBar.style.display = 'flex';
+    batchSelectedCount.innerText = `已选 ${count} 个`;
+  } else {
+    fleetBatchBar.style.display = 'none';
+  }
+  if (selectAllCheckbox) {
+    const checkboxes = fleetGrid ? fleetGrid.querySelectorAll('.card-select-checkbox') : [];
+    selectAllCheckbox.checked = checkboxes.length > 0 && Array.from(checkboxes).every(c => c.checked);
+  }
 }
 
 // ==========================================================================
@@ -580,6 +635,118 @@ function initFleetToolbar() {
     });
   }
 
+  // 全选控制
+  if (selectAllCheckbox) {
+    selectAllCheckbox.addEventListener('change', (e) => {
+      const checked = e.target.checked;
+      const visibleCheckboxes = fleetGrid ? fleetGrid.querySelectorAll('.card-select-checkbox') : [];
+      visibleCheckboxes.forEach(chk => {
+        chk.checked = checked;
+        const cid = chk.dataset.cid;
+        if (checked) selectedSessionIds.add(cid);
+        else selectedSessionIds.delete(cid);
+      });
+      updateBatchBar();
+    });
+  }
+
+  // 批量开启
+  if (batchStartBtn) {
+    batchStartBtn.addEventListener('click', async () => {
+      if (selectedSessionIds.size === 0) return;
+      showToast(`正在批量开启 ${selectedSessionIds.size} 个会话...`, '🚀');
+      try {
+        await safeFetch('/api/sessions/batch_toggle', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ conv_ids: Array.from(selectedSessionIds), enabled: true })
+        });
+        showToast(`已批量开启 ${selectedSessionIds.size} 个会话巡航！`, '🚀');
+        fetchStatus();
+      } catch (e) {
+        showToast('批量操作失败: ' + e.message, '✖');
+      }
+    });
+  }
+
+  // 批量暂停
+  if (batchStopBtn) {
+    batchStopBtn.addEventListener('click', async () => {
+      if (selectedSessionIds.size === 0) return;
+      showToast(`正在批量暂停 ${selectedSessionIds.size} 个会话...`, '⏹');
+      try {
+        await safeFetch('/api/sessions/batch_toggle', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ conv_ids: Array.from(selectedSessionIds), enabled: false })
+        });
+        showToast(`已批量暂停 ${selectedSessionIds.size} 个会话`, '⏹');
+        fetchStatus();
+      } catch (e) {
+        showToast('批量操作失败: ' + e.message, '✖');
+      }
+    });
+  }
+
+  // 批量修改提示词与冷却
+  if (batchEditBtn) {
+    batchEditBtn.addEventListener('click', async () => {
+      if (selectedSessionIds.size === 0) return;
+      const newPrompt = window.prompt(`批量修改这 ${selectedSessionIds.size} 个会话的注入指令 (留空则不修改):`, '');
+      if (newPrompt === null) return;
+      const newCooldown = window.prompt(`批量修改消抖冷却秒数 (留空则不修改):`, '');
+      if (newCooldown === null) return;
+
+      const payload = { conv_ids: Array.from(selectedSessionIds) };
+      if (newPrompt.trim()) payload.prompt = newPrompt.trim();
+      if (newCooldown.trim()) payload.cooldown = parseFloat(newCooldown);
+
+      try {
+        await safeFetch('/api/sessions/batch_update', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        showToast(`已批量更新 ${selectedSessionIds.size} 个会话参数！`, '⚙️');
+        fetchStatus();
+      } catch (e) {
+        showToast('批量更新失败: ' + e.message, '✖');
+      }
+    });
+  }
+
+  // 批量移出
+  if (batchRemoveBtn) {
+    batchRemoveBtn.addEventListener('click', async () => {
+      if (selectedSessionIds.size === 0) return;
+      if (!confirm(`确定将选中的 ${selectedSessionIds.size} 个会话全部从监控池移出吗？`)) return;
+      try {
+        await safeFetch('/api/sessions/batch_remove', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ conv_ids: Array.from(selectedSessionIds) })
+        });
+        showToast(`已移出 ${selectedSessionIds.size} 个会话`, '🗑️');
+        selectedSessionIds.clear();
+        updateBatchBar();
+        fetchStatus();
+      } catch (e) {
+        showToast('批量移出失败: ' + e.message, '✖');
+      }
+    });
+  }
+
+  // 清除批量选择
+  if (batchClearBtn) {
+    batchClearBtn.addEventListener('click', () => {
+      selectedSessionIds.clear();
+      if (selectAllCheckbox) selectAllCheckbox.checked = false;
+      const checkboxes = fleetGrid ? fleetGrid.querySelectorAll('.card-select-checkbox') : [];
+      checkboxes.forEach(c => c.checked = false);
+      updateBatchBar();
+    });
+  }
+
   // 提示音静音初始状态与切换
   const savedMute = localStorage.getItem('antigravity_sound_muted');
   if (savedMute === 'true') {
@@ -595,6 +762,89 @@ function initFleetToolbar() {
       toggleMuteBtn.innerText = isMuted ? '🔇 提示音: 关' : '🔊 提示音: 开';
       localStorage.setItem('antigravity_sound_muted', isMuted ? 'true' : 'false');
       showToast(`提示音已${isMuted ? '关闭' : '开启'}`, isMuted ? '🔇' : '🔊');
+    });
+  }
+}
+
+function initBackupRestoreModal() {
+  if (openBackupModalBtn && backupModal) {
+    openBackupModalBtn.addEventListener('click', () => {
+      backupModal.style.display = 'flex';
+    });
+  }
+
+  if (closeBackupModalBtn && backupModal) {
+    closeBackupModalBtn.addEventListener('click', () => {
+      backupModal.style.display = 'none';
+    });
+  }
+
+  if (backupModal) {
+    backupModal.addEventListener('click', (e) => {
+      if (e.target === backupModal) {
+        backupModal.style.display = 'none';
+      }
+    });
+  }
+
+  if (downloadBackupBtn) {
+    downloadBackupBtn.addEventListener('click', () => {
+      window.location.href = '/api/config/export';
+      showToast('正在下载全量配置文件...', '💾');
+    });
+  }
+
+  if (chooseImportFileBtn && importConfigFile) {
+    chooseImportFileBtn.addEventListener('click', () => {
+      importConfigFile.click();
+    });
+  }
+
+  if (importConfigFile) {
+    importConfigFile.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (evt) => {
+        if (importConfigTextarea) {
+          importConfigTextarea.value = evt.target.result;
+          showToast(`已加载文件: ${file.name}`, '📁');
+        }
+      };
+      reader.readAsText(file, 'UTF-8');
+    });
+  }
+
+  if (submitImportBtn) {
+    submitImportBtn.addEventListener('click', async () => {
+      const text = importConfigTextarea ? importConfigTextarea.value.trim() : '';
+      if (!text) {
+        showToast('请先选择文件或粘贴 JSON 配置文本', '⚠️');
+        return;
+      }
+      try {
+        const payload = JSON.parse(text);
+        submitImportBtn.disabled = true;
+        showToast('正在导入配置...', '⏳');
+        const res = await safeFetch('/api/config/import', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (data.ok) {
+          showToast(`成功导入并纳管 ${data.count} 个会话！`, '🎉');
+          if (backupModal) backupModal.style.display = 'none';
+          fetchStatus();
+          fetchLogs();
+        } else {
+          showToast(`导入失败: ${data.message || '格式错误'}`, '❌');
+        }
+      } catch (err) {
+        showToast('JSON 解析失败，请检查配置内容是否合法', '❌');
+      } finally {
+        submitImportBtn.disabled = false;
+      }
     });
   }
 }
@@ -1436,6 +1686,7 @@ if (saveWebhookBtn) {
 async function initApp() {
   initFleetToolbar();
   initLogConsoleToolbar();
+  initBackupRestoreModal();
   await fetchStatus();
   await fetchConversations();
   await fetchLogs();

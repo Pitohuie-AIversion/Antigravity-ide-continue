@@ -1997,4 +1997,144 @@ body {
   100% { opacity: 1; text-shadow: 0 0 8px rgba(251, 191, 36, 0.5); }
 }
 
+/* ========================================================================== */
+/* BATCH OPERATIONS & MULTI-SELECT TOOLBAR                                    */
+/* ========================================================================== */
+
+.fleet-select-all-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-dim);
+  cursor: pointer;
+  user-select: none;
+  padding: 4px 8px;
+  border-radius: 6px;
+  transition: all 0.2s ease;
+}
+
+.fleet-select-all-wrap:hover {
+  color: var(--text-main);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.fleet-select-all-wrap input[type="checkbox"] {
+  accent-color: var(--primary-cyan);
+  cursor: pointer;
+}
+
+.fleet-card-select-wrap {
+  display: flex;
+  align-items: center;
+  margin-right: 6px;
+}
+
+.fleet-card-select-wrap input[type="checkbox"] {
+  accent-color: var(--primary-cyan);
+  width: 14px;
+  height: 14px;
+  cursor: pointer;
+}
+
+.fleet-batch-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+  padding: 10px 16px;
+  background: linear-gradient(135deg, rgba(6, 182, 212, 0.12), rgba(15, 23, 42, 0.9));
+  border: 1px solid rgba(6, 182, 212, 0.35);
+  border-radius: 9px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35), 0 0 15px rgba(6, 182, 212, 0.15);
+  animation: slideDownFade 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes slideDownFade {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.batch-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.batch-badge {
+  background: var(--primary-cyan);
+  color: #030712;
+  font-weight: 700;
+  font-size: 11.5px;
+  padding: 3px 9px;
+  border-radius: 12px;
+}
+
+.batch-hint {
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+
+.batch-buttons {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.btn-batch {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: var(--text-main);
+  font-size: 12px;
+  padding: 5px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-batch:hover {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: var(--border-focus);
+}
+
+.btn-batch.primary {
+  background: rgba(6, 182, 212, 0.25);
+  border-color: var(--primary-cyan);
+  color: var(--primary-cyan);
+  font-weight: 600;
+}
+
+.btn-batch.primary:hover {
+  background: rgba(6, 182, 212, 0.4);
+  box-shadow: 0 0 10px rgba(6, 182, 212, 0.3);
+}
+
+.btn-batch.danger {
+  color: #f87171;
+  border-color: rgba(244, 63, 94, 0.3);
+}
+
+.btn-batch.danger:hover {
+  background: rgba(244, 63, 94, 0.2);
+  border-color: #f43f5e;
+}
+
+.btn-batch-clear {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  cursor: pointer;
+  padding: 4px 8px;
+  transition: color 0.2s ease;
+}
+
+.btn-batch-clear:hover {
+  color: var(--text-main);
+}
+
+
 

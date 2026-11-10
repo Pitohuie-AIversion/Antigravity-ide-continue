@@ -616,6 +616,48 @@ class MultiSessionDaemon:
         self.save_config()
         self.add_log("⏹ 已全部暂停自驱巡航守护。", "INFO")
 
+    def batch_toggle(self, conv_ids: List[str], enabled: bool) -> int:
+        count = 0
+        with self.lock:
+            for cid in conv_ids:
+                if cid in self.sessions:
+                    self.sessions[cid]["enabled"] = enabled
+                    self.sessions[cid]["state"] = "IDLE" if enabled else "STOPPED"
+                    self.sessions[cid]["cooldown_remaining"] = 0.0
+                    self.sessions[cid]["idle_start_time"] = None
+                    count += 1
+        if count > 0:
+            self.save_config()
+            self.add_log(f"批量{'开启' if enabled else '暂停'}了 {count} 个会话巡航", "SUCCESS" if enabled else "INFO")
+        return count
+
+    def batch_remove(self, conv_ids: List[str]) -> int:
+        count = 0
+        with self.lock:
+            for cid in conv_ids:
+                if self.sessions.pop(cid, None):
+                    count += 1
+        if count > 0:
+            self.save_config()
+            self.add_log(f"批量移出了 {count} 个会话", "INFO")
+        return count
+
+    def batch_update(self, conv_ids: List[str], prompt: Optional[str] = None,
+                     cooldown: Optional[float] = None) -> int:
+        count = 0
+        with self.lock:
+            for cid in conv_ids:
+                if cid in self.sessions:
+                    if prompt is not None:
+                        self.sessions[cid]["prompt"] = prompt.strip() or "继续"
+                    if cooldown is not None:
+                        self.sessions[cid]["cooldown"] = max(1.0, float(cooldown))
+                    count += 1
+        if count > 0:
+            self.save_config()
+            self.add_log(f"批量更新了 {count} 个会话参数 (提示词/冷却)", "SUCCESS")
+        return count
+
     def trigger_session(self, conv_id: str, text: Optional[str] = None) -> bool:
         with self.lock:
             s = self.sessions.get(conv_id)
@@ -1158,6 +1200,17 @@ class AutoPilotHTTPHandler(SimpleHTTPRequestHandler):
             with daemon.lock:
                 st = dict(daemon.strategy)
             self.send_json(st)
+        elif path == "/api/config/export":
+            with daemon.lock:
+                export_data = {
+                    "node_type": daemon.node_type,
+                    "monitored_sessions": list(daemon.sessions.values()),
+                    "webhook": daemon.webhook,
+                    "strategy": daemon.strategy,
+                    "exported_at": time.time(),
+                    "version": "2.2.0"
+                }
+            self.send_json(export_data)
         elif path == "/api/sessions/transcript":
             cid = ""
             node = "local"
@@ -1273,6 +1326,62 @@ class AutoPilotHTTPHandler(SimpleHTTPRequestHandler):
         elif path == "/api/sessions/stop_all":
             daemon.stop_all()
             self.send_json({"ok": True, "status": daemon.get_status_payload()})
+
+        elif path == "/api/sessions/batch_toggle":
+            cids = body.get("conv_ids", [])
+            enabled = bool(body.get("enabled", True))
+            count = daemon.batch_toggle(cids, enabled)
+            self.send_json({"ok": True, "count": count, "status": daemon.get_status_payload()})
+
+        elif path == "/api/sessions/batch_remove":
+            cids = body.get("conv_ids", [])
+            count = daemon.batch_remove(cids)
+            self.send_json({"ok": True, "count": count, "status": daemon.get_status_payload()})
+
+        elif path == "/api/sessions/batch_update":
+            cids = body.get("conv_ids", [])
+            prompt = body.get("prompt")
+            cooldown = body.get("cooldown")
+            count = daemon.batch_update(cids, prompt, cooldown)
+            self.send_json({"ok": True, "count": count, "status": daemon.get_status_payload()})
+
+        elif path == "/api/config/import":
+            monitored = body.get("monitored_sessions", [])
+            if not isinstance(monitored, list):
+                self.send_json({"ok": False, "message": "无效配置 (缺少 monitored_sessions)"}, status=400)
+            else:
+                with daemon.lock:
+                    for s in monitored:
+                        cid = s.get("id", "").strip()
+                        if not cid:
+                            continue
+                        daemon.sessions[cid] = {
+                            "id": cid,
+                            "node_type": s.get("node_type", "local"),
+                            "title": s.get("title", cid[:12]),
+                            "prompt": s.get("prompt", "继续"),
+                            "cooldown": float(s.get("cooldown", 3.0)),
+                            "max_turns": int(s.get("max_turns", 9999)),
+                            "enabled": bool(s.get("enabled", True)),
+                            "state": "IDLE" if s.get("enabled", True) else "STOPPED",
+                            "current_step": s.get("current_step", 0),
+                            "last_handled_step": -1,
+                            "sent_count": s.get("sent_count", 0),
+                            "cooldown_remaining": 0.0,
+                            "idle_start_time": None,
+                            "last_snippet": "",
+                            "error": "",
+                            "updated_at": time.time(),
+                            "busy_start_time": None,
+                            "busy_duration": 0
+                        }
+                    if "webhook" in body and isinstance(body["webhook"], dict):
+                        daemon.webhook.update(body["webhook"])
+                    if "strategy" in body and isinstance(body["strategy"], dict):
+                        daemon.strategy.update(body["strategy"])
+                daemon.save_config()
+                daemon.add_log(f"成功导入并合并 {len(monitored)} 个会话配置！", "SUCCESS")
+                self.send_json({"ok": True, "count": len(monitored), "status": daemon.get_status_payload()})
 
         # Legacy Compatibility Endpoints
         elif path == "/api/start":

@@ -147,6 +147,7 @@
         </div>
         <div class="fleet-actions-group">
           <button class="btn-pill-action" id="toggleMuteBtn" title="切换提示音开关">🔊 提示音: 开</button>
+          <button class="btn-pill-action" id="openBackupModalBtn">💾 备份/导入</button>
           <a href="/preview" target="_blank" class="btn-pill-action" id="openPreviewBtn" style="color: #38bdf8; border-color: rgba(56, 189, 248, 0.35);">📱 微光账单仿真</a>
           <button class="btn-pill-action" id="openWebhookModalBtn">🔔 告警推送</button>
           <button class="btn-pill-action" id="toggleTelemetryBtn">📈 效能图表</button>
@@ -158,6 +159,10 @@
 
       <!-- 矩阵过滤、检索与排序工具栏 (Fleet Toolbar) -->
       <div class="fleet-toolbar-row" id="fleetToolbarRow">
+        <label class="fleet-select-all-wrap" title="全选当前视图下的会话">
+          <input type="checkbox" id="selectAllCheckbox">
+          <span>全选</span>
+        </label>
         <div class="fleet-search-box">
           <span class="search-icon">🔍</span>
           <input type="text" id="fleetSearchInput" placeholder="快速检索会话标题、ID、设备或执行状态..." autocomplete="off">
@@ -178,6 +183,21 @@
             <option value="step">步数从高到低</option>
             <option value="name">会话标题</option>
           </select>
+        </div>
+      </div>
+
+      <!-- 批量操作控制悬浮条 (Fleet Batch Bar) -->
+      <div class="fleet-batch-bar" id="fleetBatchBar" style="display: none;">
+        <div class="batch-left">
+          <span class="batch-badge" id="batchSelectedCount">已选 0 个</span>
+          <span class="batch-hint">对所选会话批量操作：</span>
+        </div>
+        <div class="batch-buttons">
+          <button type="button" class="btn-batch primary" id="batchStartBtn">🚀 批量开启</button>
+          <button type="button" class="btn-batch" id="batchStopBtn">⏹ 批量暂停</button>
+          <button type="button" class="btn-batch" id="batchEditBtn">⚙️ 批量修改</button>
+          <button type="button" class="btn-batch danger" id="batchRemoveBtn">🗑️ 批量移出</button>
+          <button type="button" class="btn-batch-clear" id="batchClearBtn">✕ 取消选择</button>
         </div>
       </div>
 
@@ -449,6 +469,40 @@
       <div class="modal-footer">
         <button class="btn-card-action" id="copyTranscriptBtn">📋 复制最近进展文本</button>
         <button class="btn-card-action primary" id="closeTranscriptFooterBtn">关闭窗口</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 配置备份与恢复弹窗 (Backup & Restore Modal) -->
+  <div class="modal-overlay" id="backupModal" style="display: none;">
+    <div class="modal-box" style="max-width: 520px;">
+      <div class="modal-header">
+        <div class="modal-title">
+          <span>💾</span> 配置备份与多机迁移 (Backup & Restore)
+        </div>
+        <button class="modal-close-btn" id="closeBackupModalBtn">✕</button>
+      </div>
+
+      <div class="modal-body" style="padding: 20px;">
+        <div class="modal-section-title">1. 导出备份配置文件</div>
+        <p style="font-size: 12px; color: var(--text-dim); margin: 6px 0 12px;">
+          将当前全矩阵纳管会话、报警设置、调度策略等完整打包导出为 JSON 格式文件。
+        </p>
+        <button class="btn-pill-action primary" id="downloadBackupBtn" style="padding: 8px 18px;">
+          ⬇️ 下载备份 JSON 配置文件
+        </button>
+
+        <div class="modal-section-title" style="margin-top: 24px;">2. 导入恢复配置</div>
+        <p style="font-size: 12px; color: var(--text-dim); margin: 6px 0 10px;">
+          上传或粘贴备份的 JSON 配置，系统将自动合并纳管会话并实时热生效。
+        </p>
+        <textarea id="importConfigTextarea" class="custom-input" style="height: 100px; font-family: var(--font-mono); font-size: 11.5px; resize: vertical;" placeholder="在此粘贴导出的 JSON 配置文本，或点击下方选择文件..."></textarea>
+        
+        <div style="display: flex; gap: 10px; margin-top: 12px; align-items: center; justify-content: flex-end;">
+          <input type="file" id="importConfigFile" accept=".json" style="display: none;">
+          <button class="btn-pill-action" id="chooseImportFileBtn">📁 选择文件</button>
+          <button class="btn-pill-action primary" id="submitImportBtn">🚀 确认导入配置</button>
+        </div>
       </div>
     </div>
   </div>
