@@ -36,15 +36,15 @@ def get_live_daemon_status():
 
 
 def check_active_processes():
-    """检查正在运行的 auto_continue, web_server 或 8092 仿真服务器"""
+    """检查正在运行的 AntigravityAutoPilot, web_server 或 8092 仿真服务器"""
     active_procs = []
     try:
         if sys.platform == "win32":
-            cmd = "powershell -Command \"Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*web_server.py*' -or $_.CommandLine -like '*auto_continue*' -or $_.CommandLine -like '*http.server 8092*' } | Select-Object ProcessId, CommandLine\""
+            cmd = "powershell -Command \"Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*web_server.py*' -or $_.CommandLine -like '*AntigravityAutoPilot*' -or $_.CommandLine -like '*auto_continue*' -or $_.CommandLine -like '*http.server 8092*' } | Select-Object ProcessId, CommandLine\""
             res = subprocess.run(cmd, shell=True, capture_output=True, text=True, errors="replace")
             for line in res.stdout.splitlines():
                 line = line.strip()
-                if any(k in line for k in ["web_server.py", "auto_continue", "8092"]):
+                if any(k in line for k in ["web_server.py", "AntigravityAutoPilot", "auto_continue", "8092"]):
                     active_procs.append(line)
     except Exception:
         pass
@@ -112,11 +112,14 @@ def main():
                 node_short = "本地" if s.get("node_type") == "local" else "恒源云"
                 cid_short = s.get("id", "")[:8] + ".."
                 state = s.get("state", "UNKNOWN")
+                dur = s.get("busy_duration", 0)
+                dur_str = f"({dur}s)" if dur > 0 and state == "BUSY" else ""
+                state_str = f"{state} {dur_str}".strip()
                 step = f"Step {s.get('current_step', '--')}"
                 sent = f"{s.get('sent_count', 0)} 轮"
                 prompt = s.get("prompt", "继续")[:16]
                 enabled_mark = "🟢" if s.get("enabled") else "⏸️"
-                print(f"{node_short:<10} {cid_short:<12} {enabled_mark} {state:<11} {step:<10} {sent:<8} \"{prompt}\"")
+                print(f"{node_short:<10} {cid_short:<12} {enabled_mark} {state_str:<12} {step:<10} {sent:<8} \"{prompt}\"")
         else:
             print("  ⚪ 暂无纳管会话记录")
 
