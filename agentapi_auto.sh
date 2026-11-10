@@ -38,4 +38,18 @@ if [ -z "$LS_BIN" ]; then
     LS_BIN="/root/.gemini/antigravity-ide/bin/agentapi"
 fi
 
+# Auto-resolve short conversation ID prefix to full UUID if needed
+CMD="$1"
+ARG2="$2"
+if [ "$CMD" = "send-message" ] || [ "$CMD" = "get-conversation-metadata" ]; then
+    if [ -n "$ARG2" ] && [ ! -d "/root/.gemini/antigravity-ide/brain/$ARG2" ]; then
+        MATCH=$(ls -d /root/.gemini/antigravity-ide/brain/${ARG2}* 2>/dev/null | head -n 1)
+        if [ -n "$MATCH" ]; then
+            RESOLVED_ID=$(basename "$MATCH")
+            shift 2
+            set -- "$CMD" "$RESOLVED_ID" "$@"
+        fi
+    fi
+fi
+
 ANTIGRAVITY_LS_ADDRESS="127.0.0.1:$PORT" ANTIGRAVITY_CSRF_TOKEN="$TOKEN" "$LS_BIN" agentapi "$@"
