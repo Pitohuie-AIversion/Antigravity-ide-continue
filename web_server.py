@@ -268,6 +268,15 @@ class MultiSessionDaemon:
             self.add_log(f"持久化 config.json 失败: {e}", "ERROR")
 
     def send_webhook(self, event_type: str, title: str, conv_id: str, message: str, extra: Dict[str, Any] = None):
+        # Trigger native desktop notification if registered
+        if self.notification_callback:
+            try:
+                type_labels = {"COMPLETE": "🎉 任务完工", "ERROR": "⚠️ 异常告警", "TRIGGER": "⚡ 自动注入"}
+                label = type_labels.get(event_type, f"⚡ {event_type}")
+                self.notification_callback(f"{label} · {title[:16]}", message)
+            except Exception:
+                pass
+
         with self.lock:
             wh = dict(self.webhook)
         if not wh.get("enabled") or not wh.get("url"):

@@ -94,6 +94,7 @@ class AutoPilotApp:
         """后台启动 HTTP 服务与守护进程"""
         try:
             self.server = web_server.make_http_server(PORT)
+            web_server.daemon.notification_callback = self.notify
             self.server_thread = threading.Thread(target=self.server.serve_forever, daemon=True)
             self.server_thread.start()
             web_server.daemon.add_log(f"⚡ 桌面控制程序启动成功: {DASHBOARD_URL}", "SUCCESS")
