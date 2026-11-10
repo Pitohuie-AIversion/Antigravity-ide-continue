@@ -91,6 +91,17 @@ def main():
     print("   ⚡ Antigravity Auto-Pilot · 多会话并发矩阵健康巡检 (Fleet Status)")
     print("=" * 72)
 
+    if "--report" in sys.argv:
+        try:
+            req = urllib.request.Request("http://127.0.0.1:5300/api/fleet/report", headers={"User-Agent": "FleetStatusCLI/1.0"})
+            with urllib.request.urlopen(req, timeout=3.0) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                print(data.get("report", "无报告内容"))
+                return
+        except Exception as e:
+            print(f"[!] 拉取交付报告失败: {e}")
+            return
+
     live_status = get_live_daemon_status()
 
     if live_status:
@@ -110,7 +121,8 @@ def main():
             print("-" * 72)
             for s in sessions:
                 node_short = "本地" if s.get("node_type") == "local" else "恒源云"
-                cid_short = s.get("id", "")[:8] + ".."
+                pin_mark = "📌 " if s.get("pinned") else ""
+                cid_short = pin_mark + s.get("id", "")[:8] + ".."
                 state = s.get("state", "UNKNOWN")
                 dur = s.get("busy_duration", 0)
                 dur_str = f"({dur}s)" if dur > 0 and state == "BUSY" else ""
