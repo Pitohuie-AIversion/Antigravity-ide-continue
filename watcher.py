@@ -15,6 +15,7 @@ import time
 import subprocess
 from enum import Enum
 from typing import Dict, Any, List, Optional, Tuple, Callable
+from collections import deque
 
 
 class AgentState(Enum):
@@ -161,9 +162,8 @@ class AntigravityWatcher:
 
         try:
             with open(self.transcript_path, "r", encoding="utf-8", errors="ignore") as f:
-                lines = f.readlines()
-                valid_lines = [l.strip() for l in lines if l.strip()]
-                tail_lines = valid_lines[-n:] if len(valid_lines) >= n else valid_lines
+                # Use deque to only keep the last n valid lines in memory, O(n) space and much faster.
+                tail_lines = deque((line.strip() for line in f if line.strip()), maxlen=n)
                 return [json.loads(l) for l in tail_lines]
         except Exception as e:
             self.log(f"读取日志异常: {e}", "WARN")
