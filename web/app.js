@@ -420,6 +420,7 @@ function renderFleetMatrix(sessions) {
   }
 
   fleetGrid.innerHTML = '';
+  const fragment = document.createDocumentFragment();
   filtered.forEach(s => {
     const isRemote = s.node_type && s.node_type.startsWith('ssh:');
     const nodeLabel = isRemote ? '☁️ 恒源云西区' : '🖥️ 本地开发';
@@ -551,8 +552,10 @@ function renderFleetMatrix(sessions) {
       </div>
     `;
 
-    fleetGrid.appendChild(card);
+    fragment.appendChild(card);
   });
+
+  fleetGrid.appendChild(fragment);
 
   // 绑定卡片复选框事件
   fleetGrid.querySelectorAll('.card-select-checkbox').forEach(chk => {
@@ -1508,6 +1511,7 @@ function renderLogs(logs) {
     return;
   }
 
+  const fragment = document.createDocumentFragment();
   filtered.forEach(item => {
     const row = document.createElement('div');
     row.className = 'log-line';
@@ -1523,8 +1527,10 @@ function renderLogs(logs) {
       <span class="log-tag ${tagClass}">[${item.level}]</span>
       <span class="log-msg">${escapeHtml(item.text)}</span>
     `;
-    consoleBody.appendChild(row);
+    fragment.appendChild(row);
   });
+
+  consoleBody.appendChild(fragment);
 
   if (autoScrollCheckbox && autoScrollCheckbox.checked) {
     consoleBody.scrollTop = consoleBody.scrollHeight;
