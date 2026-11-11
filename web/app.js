@@ -491,7 +491,7 @@ function renderFleetMatrix(sessions) {
           <span class="conv-id-chip" title="点击复制完整会话ID" onclick="copyText('${s.id}')">${s.id.slice(0, 8)}...</span>
         </div>
         <div style="display: flex; gap: 8px; align-items: center;">
-          <button class="pin-btn ${s.pinned ? 'pinned' : ''}" onclick="toggleSessionPin('${s.id}', ${!s.pinned})" title="${s.pinned ? '取消置顶' : '置顶此会话'}">📌</button>
+          <button class="pin-btn ${s.pinned ? 'pinned' : ''}" aria-label="置顶会话" onclick="toggleSessionPin('${s.id}', ${!s.pinned})" title="${s.pinned ? '取消置顶' : '置顶此会话'}">📌</button>
           <label class="fleet-switch" title="开启/暂停该会话自驱巡航">
             <input type="checkbox" class="session-toggle" data-cid="${s.id}" ${s.enabled ? 'checked' : ''}>
             <span class="fleet-slider"></span>
@@ -501,7 +501,7 @@ function renderFleetMatrix(sessions) {
 
       <div class="fleet-card-title" title="${escapeHtml(s.title)}">
         <span class="title-text">${escapeHtml(s.title)}</span>
-        <button class="btn-rename" onclick="handleInlineRename('${s.id}', '${escapeHtml(s.title)}')" title="重命名会话">✏️</button>
+        <button class="btn-rename" aria-label="重命名会话" onclick="handleInlineRename('${s.id}', '${escapeHtml(s.title)}')" title="重命名会话">✏️</button>
       </div>
 
       <div class="fleet-card-status-row">

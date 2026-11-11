@@ -169,7 +169,7 @@
         <div class="fleet-search-box">
           <span class="search-icon">🔍</span>
           <input type="text" id="fleetSearchInput" placeholder="快速检索会话标题、ID、设备或执行状态..." autocomplete="off">
-          <button class="clear-search-btn" id="clearSearchBtn" style="display: none;">✕</button>
+          <button class="clear-search-btn" id="clearSearchBtn" aria-label="清除搜索" style="display: none;">✕</button>
         </div>
         <div class="fleet-filter-pills" id="fleetFilterPills">
           <button type="button" class="filter-pill active" data-filter="all">全部 (<span id="countAll">0</span>)</button>
@@ -355,7 +355,7 @@
         <div class="console-search-box">
           <span class="search-icon">🔍</span>
           <input type="text" id="logSearchInput" placeholder="过滤控制台日志 (支持关键词、等级、会话ID)..." autocomplete="off">
-          <button class="clear-search-btn" id="clearLogSearchBtn" style="display: none;">✕</button>
+          <button class="clear-search-btn" id="clearLogSearchBtn" aria-label="清除搜索" style="display: none;">✕</button>
         </div>
         <div class="log-level-pills" id="logLevelPills">
           <button type="button" class="log-filter-pill active" data-level="ALL">全部</button>
@@ -398,7 +398,7 @@
         <div class="modal-title">
           <span>🔔</span> Webhook 告警与事件通知配置
         </div>
-        <button class="modal-close-btn" id="closeWebhookModalBtn">✕</button>
+        <button class="modal-close-btn" id="closeWebhookModalBtn" aria-label="关闭弹窗">✕</button>
       </div>
       <div class="modal-body">
         <div class="form-row">
@@ -466,7 +466,7 @@
             <span>实时轮询</span>
           </label>
           <button class="btn-card-action" id="refreshTranscriptBtn" style="padding: 4px 10px; font-size: 12px;">🔄 刷新</button>
-          <button class="modal-close-btn" id="closeTranscriptModalBtn">✕</button>
+          <button class="modal-close-btn" id="closeTranscriptModalBtn" aria-label="关闭弹窗">✕</button>
         </div>
       </div>
 
@@ -503,7 +503,7 @@
         <div class="modal-title">
           <span>💾</span> 配置备份与多机迁移 (Backup & Restore)
         </div>
-        <button class="modal-close-btn" id="closeBackupModalBtn">✕</button>
+        <button class="modal-close-btn" id="closeBackupModalBtn" aria-label="关闭弹窗">✕</button>
       </div>
 
       <div class="modal-body" style="padding: 20px;">
@@ -537,7 +537,7 @@
         <div class="modal-title">
           <span>⚙️</span> <span>巡航调度与自愈策略设置</span>
         </div>
-        <button class="modal-close-btn" id="closeStrategyModalBtn">✕</button>
+        <button class="modal-close-btn" id="closeStrategyModalBtn" aria-label="关闭弹窗">✕</button>
       </div>
       <div class="modal-body" style="padding: 20px;">
         <div class="modal-section-title">自驱巡航高级策略</div>
@@ -602,7 +602,7 @@
         </div>
         <div style="display: flex; gap: 8px; align-items: center;">
           <button class="btn-card-action" id="refreshReportBtn" style="padding: 4px 10px; font-size: 12px;">🔄 刷新</button>
-          <button class="modal-close-btn" id="closeReportModalBtn">✕</button>
+          <button class="modal-close-btn" id="closeReportModalBtn" aria-label="关闭弹窗">✕</button>
         </div>
       </div>
       <div class="modal-body" style="padding: 20px; max-height: 60vh; overflow-y: auto;">
