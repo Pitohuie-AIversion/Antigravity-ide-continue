@@ -1,0 +1,35 @@
+{
+  "node_type": "local",
+  "monitored_sessions": [
+    {
+      "id": "9da8a11f-ad4e-493c-9081-65c42e4265de",
+      "node_type": "local",
+      "title": "帮我规划一下e盘的文件配置我要作为我的3d圆柱数据存储地方",
+      "prompt": "[/goal](slashCommand;goal) 继续全局开发",
+      "cooldown": 3.0,
+      "max_turns": 9999,
+      "enabled": false,
+      "pinned": false,
+      "tags": []
+    }
+  ],
+  "target_conversation_id": "9da8a11f-ad4e-493c-9081-65c42e4265de",
+  "continue_prompt": "[/goal](slashCommand;goal) 继续全局开发",
+  "idle_delay_seconds": 3.0,
+  "max_turns": 9999,
+  "webhook": {
+    "enabled": false,
+    "url": "",
+    "platform": "feishu",
+    "notify_on_trigger": false,
+    "notify_on_complete": true,
+    "notify_on_error": true
+  },
+  "strategy": {
+    "smart_backoff": true,
+    "auto_archive_completed": false,
+    "auto_adopt_sessions": false,
+    "stall_alert_seconds": 300,
+    "max_parallel_workers": 6
+  }
+}

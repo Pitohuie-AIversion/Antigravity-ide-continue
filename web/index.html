@@ -1,0 +1,723 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>⚡ Antigravity Auto-Pilot 控制中心 ｜ 多会话并发持续开发仪表盘</title>
+  <link rel="stylesheet" href="style.css?v=2.4">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;800&family=Outfit:wght@400;500;600;700;800;900&family=Noto+Sans+SC:wght@400;500;700;900&display=swap" rel="stylesheet">
+</head>
+<body>
+  <div class="ambient-glow glow-1"></div>
+  <div class="ambient-glow glow-2"></div>
+  <div class="ambient-dots"></div>
+
+  <div class="app-container">
+    <!-- 顶部导航栏 -->
+    <header class="app-header">
+      <div class="brand-wrap">
+        <div class="brand-logo">
+          <span class="logo-icon">⚡</span>
+          <div class="logo-pulse"></div>
+        </div>
+        <div class="brand-text">
+          <div class="brand-title">ANTIGRAVITY <span>AUTO-PILOT</span></div>
+          <div class="brand-subtitle">Antigravity 会话实时监控引擎 · 多会话并发巡航 · LSP 跨工作区静默注入</div>
+        </div>
+      </div>
+
+      <div class="header-status-group">
+        <button class="btn-pill-restart" id="headerRestartBtn" title="重启 Auto-Pilot 后端守护进程">
+          <span>🔄 重启服务</span>
+        </button>
+        <div class="lsp-badge" id="lspStatusBadge" title="Antigravity Language Server API 与会话数据库状态">
+          <span class="lsp-dot"></span>
+          <span id="lspStatusText">LSP API: 检测中</span>
+        </div>
+        <div class="status-pill stopped" id="mainStatusPill">
+          <span class="status-indicator"></span>
+          <span class="status-text" id="mainStatusText">0 会话运行中</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- 核心指标卡片矩阵 -->
+    <section class="metrics-grid">
+      <!-- 卡片1：多会话运行状态 -->
+      <div class="metric-card">
+        <div class="metric-header">
+          <span class="metric-icon">🔄</span>
+          <span class="metric-label">多会话巡航状态</span>
+        </div>
+        <div class="metric-value status-val" id="metricFleetVal">0 / 0 <span class="unit">运行</span></div>
+        <div class="metric-foot" id="metricFleetDetail">守护进程处于就绪待命状态</div>
+      </div>
+
+      <!-- 卡片2：全矩阵累计注入轮数 -->
+      <div class="metric-card">
+        <div class="metric-header">
+          <span class="metric-icon">🚀</span>
+          <span class="metric-label">全矩阵累计注入</span>
+        </div>
+        <div class="metric-value counter-val" id="metricTotalSent">0 <span class="unit">轮</span></div>
+        <div class="metric-foot">多会话独立静默并发执行</div>
+      </div>
+
+      <!-- 卡片3：动态步骤跟踪 -->
+      <div class="metric-card">
+        <div class="metric-header">
+          <span class="metric-icon">⏱</span>
+          <span class="metric-label">最新动态步骤</span>
+        </div>
+        <div class="metric-value cooldown-val" id="metricStepVal">Step --</div>
+        <div class="cooldown-track">
+          <div class="cooldown-fill" id="cooldownBar" style="width: 0%;"></div>
+        </div>
+        <div class="metric-foot" id="metricStepDetail">活跃会话状态跟踪中</div>
+      </div>
+
+      <!-- 卡片4：纳管节点分布 -->
+      <div class="metric-card">
+        <div class="metric-header">
+          <span class="metric-icon">🌐</span>
+          <span class="metric-label">节点与数据源健康</span>
+        </div>
+        <div class="metric-value conv-val" id="metricNodeDist" style="font-size: 20px;">0 本地 + 0 远程</div>
+        <div class="metric-foot" id="metricNodeDetail">
+          <span>Summaries DB + Transcript + LSP</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- 全局快捷控制区 (Global Fleet Controls) -->
+    <section class="control-deck">
+      <div class="action-buttons-row">
+        <button class="btn-main btn-start" id="startAllBtn">
+          <span class="btn-icon">▶</span>
+          <div class="btn-content">
+            <span class="btn-title">全部启动自驱巡航</span>
+            <span class="btn-desc">并发激活下方监控池中的所有会话</span>
+          </div>
+        </button>
+
+        <button class="btn-main btn-stop" id="stopAllBtn">
+          <span class="btn-icon">⏹</span>
+          <div class="btn-content">
+            <span class="btn-title">全部暂停巡航</span>
+            <span class="btn-desc">暂停所有会话的自动检测与指令注入</span>
+          </div>
+        </button>
+
+        <button class="btn-secondary btn-trigger" id="triggerAllBtn">
+          <span class="btn-icon">⚡</span>
+          <div class="btn-content">
+            <span class="btn-title">全矩阵立即注入一次</span>
+            <span class="btn-desc">向所有活跃会话同时发送提示词</span>
+          </div>
+        </button>
+      </div>
+    </section>
+
+    <!-- 📈 实时效能与活动图表 (Live Telemetry & Activity Sparkline) -->
+    <section class="telemetry-deck" id="telemetrySection">
+      <div class="telemetry-header-row">
+        <div class="telemetry-title">
+          <span class="telemetry-icon">⚡</span>
+          <span>矩阵实时吞吐量与活跃负载曲线 (Fleet Real-time Telemetry)</span>
+        </div>
+        <div class="telemetry-chips">
+          <span class="telemetry-chip">⚡ 注入速率: <strong id="telemRate">0.0</strong> 轮/分</span>
+          <span class="telemetry-chip">⏱ 运行时长: <strong id="telemUptime">0时 0分</strong></span>
+          <span class="telemetry-chip">🔔 Webhook: <strong id="telemWebhookBadge" style="color: #64748b;">未配置</strong></span>
+        </div>
+      </div>
+      <div class="telemetry-canvas-wrap">
+        <canvas id="telemetryCanvas" width="1000" height="85"></canvas>
+      </div>
+    </section>
+
+    <!-- 🚀 多会话并发巡航矩阵看板 (Multi-Session Fleet Matrix) -->
+    <section class="fleet-section" id="fleetSection">
+      <div class="fleet-header-row">
+        <div class="fleet-title-wrap">
+          <h3>🚀 多会话并发巡航矩阵看板 (Multi-Session Fleet Matrix)</h3>
+          <span class="fleet-count-badge" id="fleetCountBadge">0 个会话运行中</span>
+        </div>
+        <div class="fleet-actions-group">
+          <button class="btn-pill-action" id="toggleMuteBtn" title="切换提示音开关">🔊 提示音: 开</button>
+          <button class="btn-pill-action" id="toggleNotifBtn" title="切换操作系统桌面弹窗通知">🔔 桌面通知: 关</button>
+          <button class="btn-pill-action" id="openStrategyModalBtn" title="配置智能重试退避与自动嗅探">⚙️ 策略设置</button>
+          <button class="btn-pill-action" id="openBackupModalBtn">💾 备份/导入</button>
+          <button class="btn-pill-action" id="openReportModalBtn" title="查看并复制全矩阵 Markdown 交付总结报告">📊 交付报告</button>
+          <button class="btn-pill-action" id="openWebhookModalBtn">🔔 告警推送</button>
+          <button class="btn-pill-action" id="toggleTelemetryBtn">📈 效能图表</button>
+          <button class="btn-pill-action" id="startAllFleetBtn">▶ 全部开启</button>
+          <button class="btn-pill-action" id="stopAllFleetBtn" style="color: #f43f5e; border-color: rgba(244, 63, 94, 0.3);">⏹ 全部暂停</button>
+          <a href="#radarSection" class="btn-pill-action primary" id="enrollScrollBtn">➕ 发现/纳管会话</a>
+        </div>
+      </div>
+
+      <!-- 矩阵过滤、检索与排序工具栏 (Fleet Toolbar) -->
+      <div class="fleet-toolbar-row" id="fleetToolbarRow">
+        <label class="fleet-select-all-wrap" title="全选当前视图下的会话">
+          <input type="checkbox" id="selectAllCheckbox">
+          <span>全选</span>
+        </label>
+        <div class="fleet-search-box">
+          <span class="search-icon">🔍</span>
+          <input type="text" id="fleetSearchInput" placeholder="快速检索会话标题、工作区、ID、设备或状态..." autocomplete="off">
+          <button class="clear-search-btn" id="clearSearchBtn" style="display: none;">✕</button>
+        </div>
+        <div class="fleet-filter-pills" id="fleetFilterPills">
+          <button type="button" class="filter-pill active" data-filter="all">全部 (<span id="countAll">0</span>)</button>
+          <button type="button" class="filter-pill" data-filter="active">巡航中 (<span id="countActive">0</span>)</button>
+          <button type="button" class="filter-pill" data-filter="busy">运行中 (<span id="countBusy">0</span>)</button>
+          <button type="button" class="filter-pill" data-filter="stopped">仅监控 (<span id="countStopped">0</span>)</button>
+          <button type="button" class="filter-pill" data-filter="attention">⚠️ 待关注 (<span id="countAttention">0</span>)</button>
+          <button type="button" class="filter-pill" data-filter="local">🖥️ 本地 (<span id="countLocal">0</span>)</button>
+          <button type="button" class="filter-pill" data-filter="ssh">☁️ 远程 (<span id="countSsh">0</span>)</button>
+        </div>
+        <div class="fleet-sort-wrap">
+          <span class="sort-label">排序:</span>
+          <select id="fleetSortSelect" class="custom-select-small">
+            <option value="activity">最新心跳</option>
+            <option value="step">步数从高到低</option>
+            <option value="name">会话标题</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- 批量操作控制悬浮条 (Fleet Batch Bar) -->
+      <div class="fleet-batch-bar" id="fleetBatchBar" style="display: none;">
+        <div class="batch-left">
+          <span class="batch-badge" id="batchSelectedCount">已选 0 个</span>
+          <span class="batch-hint">对所选会话批量操作：</span>
+        </div>
+        <div class="batch-buttons">
+          <button type="button" class="btn-batch primary" id="batchStartBtn">🚀 批量开启</button>
+          <button type="button" class="btn-batch" id="batchStopBtn">⏹ 批量暂停</button>
+          <button type="button" class="btn-batch" id="batchEditBtn">⚙️ 批量修改</button>
+          <button type="button" class="btn-batch danger" id="batchRemoveBtn">🗑️ 批量移出</button>
+          <button type="button" class="btn-batch-clear" id="batchClearBtn">✕ 取消选择</button>
+        </div>
+      </div>
+
+      <!-- 动态会话矩阵容器 -->
+      <div class="fleet-grid" id="fleetGrid">
+        <!-- 动态渲染卡片 -->
+      </div>
+
+    </section>
+
+    <!-- 📡 Antigravity 会话实时发现雷达 (Live Session Radar) -->
+    <section class="radar-section" id="radarSection">
+      <div class="section-title-row" style="margin-bottom: 12px;">
+        <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+          <h3>📡 Antigravity 会话实时雷达 (Live Session Discovery)</h3>
+          <span class="fleet-count-badge" id="radarCountBadge">扫描中...</span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+          <button class="btn-pill-action" id="refreshRadarBtn">🔄 立即扫描</button>
+        </div>
+      </div>
+      <div class="radar-grid" id="radarGrid">
+        <div class="radar-empty">⏳ 正在从 Antigravity 会话索引与日志同步活动会话...</div>
+      </div>
+    </section>
+
+    <!-- 参数配置与纳管新会话中心 -->
+    <section class="config-section" id="enrollSection">
+      <div class="section-title-row">
+        <h3>⚙️ 纳管新会话与自动化参数配置 (Enroll Session & Routing)</h3>
+        <button class="btn-pill-action" id="refreshConvsBtn">🔄 刷新会话列表</button>
+      </div>
+
+      <!-- 运行环境节点选择 (Local / SSH Remote) -->
+      <div class="node-selector-card">
+        <div class="node-selector-header">
+          <div class="node-selector-label">
+            <span class="node-icon-title">🌐</span>
+            <span class="node-text-title">选择浏览节点 (Browsing Execution Node)</span>
+          </div>
+          <span class="node-badge" id="currentNodeBadge">🖥️ 本地环境 (Local)</span>
+        </div>
+        <div class="node-pills-row">
+          <button class="node-pill active" id="nodeBtnLocal" data-node="local">
+            <span class="pill-dot"></span>
+            <span class="pill-icon">🖥️</span>
+            <div class="pill-info">
+              <span class="pill-name">本地 Antigravity (Windows)</span>
+              <span class="pill-sub">~/.gemini/antigravity/brain · conversation_summaries.db</span>
+            </div>
+          </button>
+          <button class="node-pill" id="nodeBtnWestc" data-node="ssh:seetacloud-westc">
+            <span class="pill-dot"></span>
+            <span class="pill-icon">☁️</span>
+            <div class="pill-info">
+              <span class="pill-name">远程 SSH 节点 (seetacloud-westc)</span>
+              <span class="pill-sub">~/.gemini/antigravity-ide/brain · 可选远程扫描</span>
+            </div>
+          </button>
+        </div>
+      </div>
+
+      <div class="config-grid">
+        <!-- 目标会话选择 -->
+        <div class="config-col">
+          <label class="config-label">
+            <span>🎯 待纳管会话 (Select Conversation to Enroll)</span>
+            <span class="config-hint" id="convCountHint">已扫描 0 个活跃对话</span>
+          </label>
+          <div class="search-filter-wrap" style="margin-bottom: 8px;">
+            <input type="text" class="custom-input" id="convSearchInput" placeholder="🔍 实时搜索会话标题、工作区、关键词或 ID..." style="padding: 7px 12px; font-size: 12px; background: rgba(0, 0, 0, 0.35); border-color: rgba(255, 255, 255, 0.12);">
+          </div>
+          <div class="select-wrapper">
+            <select class="custom-select" id="convSelect">
+              <option value="">正在扫描 Antigravity 会话列表...</option>
+            </select>
+          </div>
+          <div class="conv-preview-snippet" id="convPreviewSnippet">
+            会话预览：(请从上方选择或从雷达一键加入)
+          </div>
+          <div class="checkbox-row" style="display:flex; flex-direction:column; align-items:flex-start; gap:8px;">
+            <label class="custom-checkbox" title="自动过滤掉在IDE中点击加号新建但未发过任何消息的空会话">
+              <input type="checkbox" id="hideEmptyCheckbox" checked>
+              <span class="checkmark"></span>
+              <span>隐藏未发消息的空白会话（仅显示有步骤记录的会话）</span>
+            </label>
+            <label class="custom-checkbox" title="过滤掉主会话派生出来的 browser/research 等后台子代理内部会话">
+              <input type="checkbox" id="hideSubagentsCheckbox" checked>
+              <span class="checkmark"></span>
+              <span>隐藏子代理内部会话（如 browser / research subagent）</span>
+            </label>
+          </div>
+
+          <!-- 添加按钮组 -->
+          <div class="enroll-actions-row">
+            <button class="btn-main btn-start" id="addSessionToFleetBtn" style="flex: 1.4; padding: 12px 16px;">
+              <span class="btn-icon">🚀</span>
+              <div class="btn-content">
+                <span class="btn-title">加入巡航并自动续写</span>
+                <span class="btn-desc">实时监控状态并按策略自动注入指令</span>
+              </div>
+            </button>
+            <button class="btn-secondary btn-monitor-only" id="addMonitorOnlyBtn" style="flex: 1; padding: 12px 14px;" title="仅将该会话加入上方矩阵监控步数、状态与转录，不自动发送消息">
+              <span class="btn-icon">👁️</span>
+              <div class="btn-content">
+                <span class="btn-title" style="font-size: 14px;">仅实时监控</span>
+                <span class="btn-desc">只观测不注入</span>
+              </div>
+            </button>
+          </div>
+        </div>
+
+        <!-- 注入指令与提示词设置 -->
+        <div class="config-col">
+          <label class="config-label">
+            <span>💬 默认自动注入指令 (Prompt Content)</span>
+            <span class="config-hint">该会话每轮结束时注入的文字</span>
+          </label>
+          <div style="display: flex; gap: 8px;">
+            <input type="text" class="custom-input" id="promptInput" value="继续推进下一项任务" placeholder="例如：[/goal](slashCommand;goal) 继续全局开发">
+            <button type="button" class="btn-card-action" id="saveCustomPromptBtn" title="将当前输入的指令存入常用指令库" style="white-space: nowrap; padding: 0 14px; font-size: 12px;">⭐ 存为常用</button>
+          </div>
+          
+          <!-- 快捷提示词宏与历史药丸容器 -->
+          <div class="prompt-pills" id="promptMacroBar">
+            <button type="button" class="prompt-pill" data-val="[/goal](slashCommand;goal) 继续全局开发">🚀 /goal 全局开发</button>
+            <button type="button" class="prompt-pill" data-val="[/plan](slashCommand;plan) 规划并推进下一阶段">📋 /plan 规划阶段</button>
+            <button type="button" class="prompt-pill" data-val="继续推进下一项任务">⚡ 继续推进任务</button>
+            <button type="button" class="prompt-pill" data-val="自测代码并验证效果">🧪 自测与验证</button>
+            <button type="button" class="prompt-pill" data-val="生成完整交付总结报告">📊 交付总结报告</button>
+          </div>
+
+          <!-- 分类标签设置 -->
+          <div style="margin-top: 10px;">
+            <label class="config-label" style="margin-bottom: 6px;">
+              <span>🏷️ 标签分类 (可选，逗号分隔)</span>
+              <span class="config-hint">如：核心, 后端, 自动化, 实验</span>
+            </label>
+            <input type="text" class="custom-input" id="enrollTagsInput" placeholder="例如：核心, 后端, 仿真测试">
+          </div>
+
+          <!-- 冷却时间与轮数设置 -->
+          <div class="params-row">
+            <div class="param-item">
+              <label class="sub-label">冷却消抖延迟 (秒)</label>
+              <div class="number-input-wrap">
+                <input type="number" class="param-input" id="cooldownInput" value="3.0" min="1.0" max="15.0" step="0.5">
+                <span class="param-unit">秒</span>
+              </div>
+            </div>
+
+            <div class="param-item">
+              <label class="sub-label">最大轮数上限</label>
+              <div class="number-input-wrap">
+                <input type="number" class="param-input" id="maxTurnsInput" value="9999" min="1" max="99999">
+                <span class="param-unit">轮</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="checkbox-row" style="margin-top: 10px;">
+            <label class="custom-checkbox">
+              <input type="checkbox" id="soundAlertCheckbox" checked>
+              <span class="checkmark"></span>
+              <span>注入成功播放 Web Audio 空灵提示音</span>
+            </label>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 实时运行日志控制台 (Live Execution Console) -->
+    <section class="console-section">
+      <div class="console-header">
+        <div class="console-title">
+          <span class="terminal-dot red"></span>
+          <span class="terminal-dot yellow"></span>
+          <span class="terminal-dot green"></span>
+          <span class="console-name">📜 实时并发审计控制台 (Live Fleet Console)</span>
+        </div>
+
+        <div class="console-actions">
+          <label class="auto-scroll-toggle">
+            <input type="checkbox" id="autoScrollCheckbox" checked>
+            <span>自动滚屏</span>
+          </label>
+          <button class="console-btn" id="copyLogsBtn">📋 复制日志</button>
+          <button class="console-btn" id="clearLogsBtn">🗑️ 清空日志</button>
+        </div>
+      </div>
+
+      <!-- 日志过滤检索工具栏 -->
+      <div class="console-filter-toolbar">
+        <div class="console-search-box">
+          <span class="search-icon">🔍</span>
+          <input type="text" id="logSearchInput" placeholder="过滤控制台日志 (支持关键词、等级、会话ID)..." autocomplete="off">
+          <button class="clear-search-btn" id="clearLogSearchBtn" style="display: none;">✕</button>
+        </div>
+        <div class="log-level-pills" id="logLevelPills">
+          <button type="button" class="log-filter-pill active" data-level="ALL">全部</button>
+          <button type="button" class="log-filter-pill" data-level="TRIGGER">⚡ 注入</button>
+          <button type="button" class="log-filter-pill" data-level="SUCCESS">✅ 成功</button>
+          <button type="button" class="log-filter-pill" data-level="WARN">⚠️ 警告</button>
+          <button type="button" class="log-filter-pill" data-level="ERROR">❌ 错误</button>
+        </div>
+      </div>
+
+      <div class="console-body" id="consoleBody">
+        <div class="log-line info">
+          <span class="log-ts">[00:00:00]</span>
+          <span class="log-tag tag-info">[SYSTEM]</span>
+          <span class="log-msg">Antigravity Auto-Pilot 多会话并发控制中心已就绪，正在连接守护引擎...</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- 底部快捷工具与外部导航 -->
+    <footer class="app-footer">
+      <div class="footer-links">
+        <button class="footer-link-btn" id="quickTestLspBtn">
+          <span>🔍</span> 主动诊断 Language Server 与会话索引
+        </button>
+        <span class="footer-sep">·</span>
+        <span class="footer-copy">© 2026 Antigravity Auto-Pilot · Multi-Session Fleet Monitor</span>
+      </div>
+    </footer>
+  </div>
+
+  <!-- Webhook 告警与通知配置弹窗 (Webhook Modal) -->
+  <div class="modal-overlay" id="webhookModal" style="display: none;">
+    <div class="modal-box">
+      <div class="modal-header">
+        <div class="modal-title">
+          <span>🔔</span> Webhook 告警与事件通知配置
+        </div>
+        <button class="modal-close-btn" id="closeWebhookModalBtn">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-row">
+          <label class="custom-checkbox">
+            <input type="checkbox" id="whEnabledCheckbox">
+            <span class="checkmark"></span>
+            <span style="font-weight: 600; color: #f8fafc;">启用 Webhook 自动化推送通知</span>
+          </label>
+        </div>
+
+        <div class="form-group" style="margin-top: 14px;">
+          <label class="form-label">推送目标平台 (Platform)</label>
+          <div class="platform-pills-row" id="platformPillsRow">
+            <button type="button" class="platform-pill active" data-platform="feishu">飞书 / Lark</button>
+            <button type="button" class="platform-pill" data-platform="dingtalk">钉钉 (DingTalk)</button>
+            <button type="button" class="platform-pill" data-platform="wecom">企业微信</button>
+            <button type="button" class="platform-pill" data-platform="generic">通用 Webhook</button>
+          </div>
+        </div>
+
+        <div class="form-group" style="margin-top: 14px;">
+          <label class="form-label">Webhook 接收端 URL</label>
+          <input type="text" class="custom-input" id="whUrlInput" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/..." style="width: 100%; box-sizing: border-box; font-family: var(--font-mono); font-size: 12.5px;">
+        </div>
+
+        <div class="form-group" style="margin-top: 14px;">
+          <label class="form-label">通知触发事件 (Trigger Events)</label>
+          <div class="checkbox-group" style="display: flex; flex-direction: column; gap: 8px; margin-top: 6px;">
+            <label class="custom-checkbox">
+              <input type="checkbox" id="whNotifyComplete" checked>
+              <span class="checkmark"></span>
+              <span>🎉 达成任务完工声明或轮数达标时通知 (Complete)</span>
+            </label>
+            <label class="custom-checkbox">
+              <input type="checkbox" id="whNotifyError" checked>
+              <span class="checkmark"></span>
+              <span>⚠️ 远程/本地出现连接故障或指令注入失败时告警 (Error)</span>
+            </label>
+            <label class="custom-checkbox">
+              <input type="checkbox" id="whNotifyTrigger">
+              <span class="checkmark"></span>
+              <span>⚡ 每轮指令成功自动注入时通知 (Trigger)</span>
+            </label>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-card-action" id="testWebhookBtn">🧪 发送测试通知</button>
+        <button class="btn-card-action primary" id="saveWebhookBtn">💾 保存 Webhook 配置</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 会话最新进展与转录查看弹窗 (Transcript Modal) -->
+  <div class="modal-overlay" id="transcriptModal" style="display: none;">
+    <div class="modal-box modal-large">
+      <div class="modal-header">
+        <div class="modal-title">
+          <span>📜</span> <span id="transcriptModalTitle">会话最新执行进展回溯</span>
+        </div>
+        <div style="display: flex; gap: 10px; align-items: center;">
+          <label class="custom-checkbox" style="font-size: 12px; margin-bottom: 0;" title="每隔 3 秒自动轮询该会话的最新步骤事件">
+            <input type="checkbox" id="transcriptLiveCheckbox" checked>
+            <span class="checkmark"></span>
+            <span>实时轮询</span>
+          </label>
+          <button class="btn-card-action" id="refreshTranscriptBtn" style="padding: 4px 10px; font-size: 12px;">🔄 刷新</button>
+          <button class="modal-close-btn" id="closeTranscriptModalBtn">✕</button>
+        </div>
+      </div>
+
+      <!-- 转录内容筛选工具栏 -->
+      <div class="transcript-toolbar">
+        <div class="transcript-search-box">
+          <span style="font-size: 11px; opacity: 0.5; margin-right: 6px;">🔍</span>
+          <input type="text" id="transcriptSearchInput" placeholder="检索步骤输出或工具调用..." autocomplete="off">
+        </div>
+        <div class="tr-pills" id="transcriptFilterPills">
+          <button type="button" class="tr-pill active" data-tr="ALL">全部步骤</button>
+          <button type="button" class="tr-pill" data-tr="MODEL">🤖 模型回复</button>
+          <button type="button" class="tr-pill" data-tr="TOOL">🛠️ 工具调用</button>
+          <button type="button" class="tr-pill" data-tr="USER">👤 指令注入</button>
+        </div>
+      </div>
+
+      <div class="modal-body" style="max-height: 60vh; overflow-y: auto; padding: 18px 22px;">
+        <div class="timeline-container" id="transcriptTimeline">
+          <!-- 动态步骤渲染区 -->
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-card-action" id="copyTranscriptBtn">📋 复制最近进展文本</button>
+        <button class="btn-card-action primary" id="closeTranscriptFooterBtn">关闭窗口</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 配置备份与恢复弹窗 (Backup & Restore Modal) -->
+  <div class="modal-overlay" id="backupModal" style="display: none;">
+    <div class="modal-box" style="max-width: 520px;">
+      <div class="modal-header">
+        <div class="modal-title">
+          <span>💾</span> 配置备份与多机迁移 (Backup & Restore)
+        </div>
+        <button class="modal-close-btn" id="closeBackupModalBtn">✕</button>
+      </div>
+
+      <div class="modal-body" style="padding: 20px;">
+        <div class="modal-section-title">1. 导出备份配置文件</div>
+        <p style="font-size: 12px; color: var(--text-dim); margin: 6px 0 12px;">
+          将当前全矩阵纳管会话、报警设置、调度策略等完整打包导出为 JSON 格式文件。
+        </p>
+        <button class="btn-pill-action primary" id="downloadBackupBtn" style="padding: 8px 18px;">
+          ⬇️ 下载备份 JSON 配置文件
+        </button>
+
+        <div class="modal-section-title" style="margin-top: 24px;">2. 导入恢复配置</div>
+        <p style="font-size: 12px; color: var(--text-dim); margin: 6px 0 10px;">
+          上传或粘贴备份的 JSON 配置，系统将自动合并纳管会话并实时热生效。
+        </p>
+        <textarea id="importConfigTextarea" class="custom-input" style="height: 100px; font-family: var(--font-mono); font-size: 11.5px; resize: vertical;" placeholder="在此粘贴导出的 JSON 配置文本，或点击下方选择文件..."></textarea>
+        
+        <div style="display: flex; gap: 10px; margin-top: 12px; align-items: center; justify-content: flex-end;">
+          <input type="file" id="importConfigFile" accept=".json" style="display: none;">
+          <button class="btn-pill-action" id="chooseImportFileBtn">📁 选择文件</button>
+          <button class="btn-pill-action primary" id="submitImportBtn">🚀 确认导入配置</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ⚙️ 巡航调度与自愈策略设置弹窗 (Strategy Modal) -->
+  <div class="modal-overlay" id="strategyModal" style="display: none;">
+    <div class="modal-box" style="max-width: 500px;">
+      <div class="modal-header">
+        <div class="modal-title">
+          <span>⚙️</span> <span>巡航调度与自愈策略设置</span>
+        </div>
+        <button class="modal-close-btn" id="closeStrategyModalBtn">✕</button>
+      </div>
+      <div class="modal-body" style="padding: 20px;">
+        <div class="modal-section-title">自驱巡航高级策略</div>
+        <div style="display: flex; flex-direction: column; gap: 14px; margin-top: 14px;">
+          <label class="custom-checkbox" style="font-size: 13px;">
+            <input type="checkbox" id="stratAutoAdoptCheckbox">
+            <span class="checkmark"></span>
+            <div>
+              <strong>自动嗅探并纳管新活动会话 (Auto-Adopt)</strong>
+              <div style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">
+                当 IDE 开启新对话窗口且产生执行步骤时，后台守护自动将其加入监控池并发巡航
+              </div>
+            </div>
+          </label>
+
+          <label class="custom-checkbox" style="font-size: 13px;">
+            <input type="checkbox" id="stratSmartBackoffCheckbox" checked>
+            <span class="checkmark"></span>
+            <div>
+              <strong>智能错误退避 (Smart Backoff)</strong>
+              <div style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">
+                若单次注入失败（如 LSP 暂时断连），自动倍增冷却时间（最大 60s），避免雪崩重试
+              </div>
+            </div>
+          </label>
+
+          <label class="custom-checkbox" style="font-size: 13px;">
+            <input type="checkbox" id="stratAutoArchiveCheckbox">
+            <span class="checkmark"></span>
+            <div>
+              <strong>完工声明自动归档 (Auto-Archive)</strong>
+              <div style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">
+                当检测到会话输出包含完工关键词时，自动暂停并设为完工状态
+              </div>
+            </div>
+          </label>
+
+          <div style="margin-top: 8px;">
+            <label style="font-size: 12px; font-weight: 600; color: var(--text-dim); display: block; margin-bottom: 6px;">
+              会话超时/卡顿预警阈值 (秒):
+            </label>
+            <div style="display: flex; gap: 10px; align-items: center;">
+              <input type="number" id="stratStallAlertInput" class="custom-input" min="30" max="3600" value="300" style="width: 120px;">
+              <span style="font-size: 11.5px; color: var(--text-dim);">超过此时长未结束将标黄高亮预警</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer" style="display: flex; justify-content: flex-end; gap: 10px; padding: 12px 20px; border-top: 1px solid var(--border-subtle);">
+        <button class="btn-card-action" id="cancelStrategyModalBtn">取消</button>
+        <button class="btn-card-action primary" id="saveStrategyModalBtn">💾 保存生效</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 📊 全矩阵任务交付与巡航报告弹窗 (Report Modal) -->
+  <div class="modal-overlay" id="reportModal" style="display: none;">
+    <div class="modal-box modal-large" style="max-width: 780px;">
+      <div class="modal-header">
+        <div class="modal-title">
+          <span>📊</span> <span>全矩阵任务交付与巡航报告</span>
+        </div>
+        <div style="display: flex; gap: 8px; align-items: center;">
+          <button class="btn-card-action" id="refreshReportBtn" style="padding: 4px 10px; font-size: 12px;">🔄 刷新</button>
+          <button class="modal-close-btn" id="closeReportModalBtn">✕</button>
+        </div>
+      </div>
+      <div class="modal-body" style="padding: 20px; max-height: 60vh; overflow-y: auto;">
+        <pre id="reportMarkdownPre" style="background: rgba(0, 0, 0, 0.45); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 8px; padding: 16px; font-family: var(--font-mono); font-size: 12px; color: var(--text-main); white-space: pre-wrap; line-height: 1.6; user-select: text;"></pre>
+      </div>
+      <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center; padding: 12px 20px; border-top: 1px solid var(--border-subtle);">
+        <span style="font-size: 11px; color: var(--text-dim);">可直接复制 Markdown 粘贴至工作汇报、周报或 PR 描述</span>
+        <div style="display: flex; gap: 10px;">
+          <button class="btn-card-action" id="downloadReportBtn">⬇️ 导出 .md 文件</button>
+          <button class="btn-card-action primary" id="copyReportBtn">📋 复制 Markdown 报告</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ⚙️ 会话专属参数配置与参数微调弹窗 (Session Edit Modal) -->
+  <div class="modal-overlay" id="sessionEditModal" style="display: none;">
+    <div class="modal-box" style="max-width: 560px;">
+      <div class="modal-header">
+        <div class="modal-title">
+          <span>⚙️</span> <span id="sessionEditModalTitle">配置会话参数</span>
+        </div>
+        <button class="modal-close-btn" id="closeSessionEditModalBtn">✕</button>
+      </div>
+      <div class="modal-body" style="padding: 20px;">
+        <input type="hidden" id="editSessionCid">
+        <div class="form-group">
+          <label class="form-label" style="font-size: 12px; font-weight: 600; color: var(--text-muted); margin-bottom: 6px; display: block;">会话标题 (Title)</label>
+          <input type="text" class="custom-input" id="editSessionTitle" placeholder="会话名称...">
+        </div>
+        <div class="form-group" style="margin-top: 14px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+            <label class="form-label" style="font-size: 12px; font-weight: 600; color: var(--text-muted); margin-bottom: 0;">自动注入指令 (Prompt Content)</label>
+            <button type="button" class="btn-card-action" id="saveEditPromptMacroBtn" style="padding: 2px 8px; font-size: 11px;">⭐ 存为常用</button>
+          </div>
+          <input type="text" class="custom-input" id="editSessionPrompt">
+          <!-- 快捷提示词宏与历史药丸容器 (Edit Modal) -->
+          <div class="prompt-pills" id="editPromptMacroBar" style="margin-top: 8px;"></div>
+        </div>
+        <div class="params-row" style="margin-top: 14px; display: grid; grid-template-columns: 1fr 1fr; gap: 14px;">
+          <div class="param-item">
+            <label class="sub-label">消抖冷却延迟 (秒)</label>
+            <div class="number-input-wrap">
+              <input type="number" class="param-input" id="editSessionCooldown" min="1.0" max="60.0" step="0.5">
+              <span class="param-unit">秒</span>
+            </div>
+          </div>
+          <div class="param-item">
+            <label class="sub-label">最大轮数上限</label>
+            <div class="number-input-wrap">
+              <input type="number" class="param-input" id="editSessionMaxTurns" min="1" max="99999">
+              <span class="param-unit">轮</span>
+            </div>
+          </div>
+        </div>
+        <div class="form-group" style="margin-top: 14px;">
+          <label class="form-label" style="font-size: 12px; font-weight: 600; color: var(--text-muted); margin-bottom: 6px; display: block;">分类标签 (Tags，逗号分隔)</label>
+          <input type="text" class="custom-input" id="editSessionTags" placeholder="例如: 核心, 后端, 算法">
+        </div>
+        <div class="checkbox-row" style="margin-top: 14px;">
+          <label class="custom-checkbox">
+            <input type="checkbox" id="editSessionPinned">
+            <span class="checkmark"></span>
+            <span>📌 将此会话置顶于矩阵看板首位</span>
+          </label>
+        </div>
+      </div>
+      <div class="modal-footer" style="display: flex; justify-content: flex-end; gap: 10px; padding: 12px 20px; border-top: 1px solid var(--border-subtle);">
+        <button class="btn-card-action" id="cancelSessionEditBtn">取消</button>
+        <button class="btn-card-action primary" id="saveSessionEditBtn">💾 保存更新</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 轻量级浮动 Toast -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <script src="app.js?v=2.3"></script>
+</body>
+</html>
