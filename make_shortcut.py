@@ -8,35 +8,33 @@ if sys.platform == "win32":
     except Exception:
         pass
 
-base_dir = os.path.dirname(os.path.abspath(__file__))
-exe_path = os.path.join(base_dir, "AntigravityAutoPilot.exe")
-target_path = exe_path if os.path.exists(exe_path) else os.path.join(base_dir, "start_ui.bat")
-icon_path = os.path.join(base_dir, "assets", "icon.ico")
+script = r"""
+$targets = @(
+    [Environment]::GetFolderPath('Desktop'),
+    "C:\Users\Administrator\Desktop",
+    "X:\Users\Administrator\Desktop"
+)
 
-script = f"""
-$desktop = [Environment]::GetFolderPath('Desktop')
 $wsh = New-Object -ComObject WScript.Shell
 
-if (Test-Path $desktop) {{
-    $p = Join-Path $desktop "Antigravity Auto-Pilot.lnk"
-    $sc = $wsh.CreateShortcut($p)
-    $sc.TargetPath = '{target_path}'
-    $sc.WorkingDirectory = '{base_dir}'
-    if (Test-Path '{icon_path}') {{
-        $sc.IconLocation = '{icon_path},0'
-    }}
-    $sc.Description = "Antigravity Auto-Pilot 多会话并发控制中心"
-    $sc.Save()
-    Write-Output "Created: $p"
-}}
+foreach ($t in $targets) {
+    if (Test-Path $t) {
+        $p = Join-Path $t "Antigravity Auto-Pilot.lnk"
+        $sc = $wsh.CreateShortcut($p)
+        $sc.TargetPath = "d:\📁 01_Workspaces (代码与工程区)\continue\AntigravityAutoPilot.exe"
+        $sc.WorkingDirectory = "d:\📁 01_Workspaces (代码与工程区)\continue"
+        $sc.IconLocation = "d:\📁 01_Workspaces (代码与工程区)\continue\assets\icon.ico,0"
+        $sc.Description = "Antigravity Auto-Pilot 多会话并发控制中心"
+        $sc.Save()
+        Write-Output "Created: $p"
+    }
+}
 
-$wsShortcut = Join-Path '{base_dir}' "启动控制中心.lnk"
+$wsShortcut = "d:\📁 01_Workspaces (代码与工程区)\continue\启动控制中心.lnk"
 $sc2 = $wsh.CreateShortcut($wsShortcut)
-$sc2.TargetPath = '{target_path}'
-$sc2.WorkingDirectory = '{base_dir}'
-if (Test-Path '{icon_path}') {{
-    $sc2.IconLocation = '{icon_path},0'
-}}
+$sc2.TargetPath = "d:\📁 01_Workspaces (代码与工程区)\continue\AntigravityAutoPilot.exe"
+$sc2.WorkingDirectory = "d:\📁 01_Workspaces (代码与工程区)\continue"
+$sc2.IconLocation = "d:\📁 01_Workspaces (代码与工程区)\continue\assets\icon.ico,0"
 $sc2.Description = "Antigravity Auto-Pilot 多会话并发控制中心"
 $sc2.Save()
 Write-Output "Created: $wsShortcut"

@@ -10,7 +10,6 @@ import sys
 import time
 import json
 import subprocess
-from typing import Tuple
 
 # 解决 Windows 控制台编码
 if sys.platform == "win32":
@@ -19,20 +18,15 @@ if sys.platform == "win32":
     except Exception:
         pass
 
-# 核心路径定位 (兼容 Antigravity 2.0 与旧版 Antigravity IDE)
-from ls_discovery import (
-    resolve_brain_dir,
-    resolve_ls_exe,
-    resolve_agentapi_bat,
-    get_active_ls_env,
-    build_clean_agentapi_env,
-    load_conversation_summaries,
-    get_conversation_summary,
+# 核心路径定位
+USER_HOME = os.path.expanduser("~")
+BRAIN_DIR = os.path.join(USER_HOME, ".gemini", "antigravity-ide", "brain")
+AGENTAPI_BAT = os.path.join(USER_HOME, ".gemini", "antigravity-ide", "bin", "agentapi.bat")
+LOCAL_APP_DATA = os.environ.get("LOCALAPPDATA", os.path.join(USER_HOME, "AppData", "Local"))
+LS_EXE = os.path.join(
+    LOCAL_APP_DATA, "Programs", "Antigravity IDE", "resources", "app",
+    "extensions", "antigravity", "bin", "language_server_windows_x64.exe"
 )
-
-BRAIN_DIR = resolve_brain_dir()
-AGENTAPI_BAT = resolve_agentapi_bat()
-LS_EXE = resolve_ls_exe()
 
 # 配置项
 PROMPT_TEXT = "继续"     # 每次自动输入的内容
@@ -40,16 +34,12 @@ COOLDOWN_SECONDS = 3     # AI回答完毕后缓冲等待秒数（确保输出和
 MAX_TURNS = 9999         # 持续无限轮数模式
 
 
-def get_latest_conversation() -> Tuple[str, str]:
-    """获取最新活跃的主对话 ID 及日志路径（自动跳过子代理会话）"""
+def get_latest_conversation() -> tuple[str, str]:
+    """获取最新活跃的对话 ID 及日志路径"""
     if not os.path.exists(BRAIN_DIR):
         return "", ""
-    summaries = load_conversation_summaries()
     candidates = []
     for entry in os.listdir(BRAIN_DIR):
-        meta = summaries.get(entry, {})
-        if meta.get("is_subagent"):
-            continue
         p = os.path.join(BRAIN_DIR, entry, ".system_generated", "logs", "transcript.jsonl")
         if os.path.exists(p):
             candidates.append((entry, p, os.path.getmtime(p)))
@@ -59,7 +49,7 @@ def get_latest_conversation() -> Tuple[str, str]:
     return candidates[0][0], candidates[0][1]
 
 
-def get_target_conversation() -> Tuple[str, str, bool]:
+def get_target_conversation() -> tuple[str, str, bool]:
     """
     获取目标对话 ID。
     返回: (conv_id, transcript_path, is_locked)
@@ -96,7 +86,7 @@ COMPLETION_KEYWORDS = [
 ]
 
 
-def get_last_step_info(transcript_path: str, conv_id: str = "") -> Tuple[int, bool, bool, str]:
+def get_last_step_info(transcript_path: str) -> tuple[int, bool, bool, str]:
     """
     检查是否一轮对话已结束，并判断是否包含完工声明。
     返回: (step_index, is_finished, is_completed, content_snippet)
@@ -106,7 +96,7 @@ def get_last_step_info(transcript_path: str, conv_id: str = "") -> Tuple[int, bo
             lines = [l.strip() for l in f if l.strip()]
         if not lines:
             return -1, False, False, ""
-
+        
         last_step = json.loads(lines[-1])
         step_idx = last_step.get("step_index", -1)
         step_type = last_step.get("type", "")
@@ -114,27 +104,9 @@ def get_last_step_info(transcript_path: str, conv_id: str = "") -> Tuple[int, bo
         tool_calls = last_step.get("tool_calls", [])
         content = str(last_step.get("content", ""))
 
-        has_ask_q = any(
-            isinstance(t, dict) and "ask_question" in str(t.get("name") or t.get("tool") or "")
-            for t in (tool_calls or [])
-        )
-        db_running = False
-        if conv_id:
-            summary = get_conversation_summary(conv_id)
-            if summary:
-                db_st = summary.get("status", "")
-                if db_st in ("CASCADE_RUN_STATUS_RUNNING", "CASCADE_RUN_STATUS_BUSY", "CASCADE_RUN_STATUS_CANCELING") or summary.get("not_fully_idle"):
-                    db_running = True
-
-        # 当最后一步是 PLANNER_RESPONSE 且 DONE，且没有未执行完的工具调用及后台任务时，表示本轮已结束
-        is_finished = (
-            step_type == "PLANNER_RESPONSE"
-            and status == "DONE"
-            and len(tool_calls) == 0
-            and not has_ask_q
-            and not db_running
-        )
-
+        # 当最后一步是 PLANNER_RESPONSE 且 DONE，且没有未执行完的工具调用时，表示本轮已结束
+        is_finished = (step_type == "PLANNER_RESPONSE" and status == "DONE" and len(tool_calls) == 0)
+        
         # 检查是否匹配到完工关键词
         content_lower = content.lower()
         is_completed = is_finished and any(k in content_lower for k in COMPLETION_KEYWORDS)
@@ -161,17 +133,12 @@ def send_continue(conv_id: str, text: str = PROMPT_TEXT) -> bool:
             startupinfo = subprocess.STARTUPINFO()
             startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
 
-        addr, token = get_active_ls_env()
-        run_env = build_clean_agentapi_env(addr=addr, token=token)
-
         res = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
             encoding="utf-8",
             errors="replace",
-            stdin=subprocess.DEVNULL,
-            env=run_env,
             startupinfo=startupinfo,
             timeout=10
         )
@@ -217,7 +184,7 @@ def main():
                         last_handled_step = -1
                         print(f"\n[*] 自动切换到最新对话: {current_conv_id}")
 
-            step_idx, finished, is_completed, snippet = get_last_step_info(transcript_path, current_conv_id)
+            step_idx, finished, is_completed, snippet = get_last_step_info(transcript_path)
             now = time.time()
 
             if is_completed:
@@ -232,23 +199,22 @@ def main():
                 
                 elapsed = now - idle_start_time
                 if elapsed >= COOLDOWN_SECONDS:
+                    sent_count += 1
+                    last_handled_step = step_idx
                     timestamp = time.strftime("%H:%M:%S")
-                    next_round = sent_count + 1
-                    print(f"[{timestamp}] 检测到一轮对话结束 (Step {step_idx})，自动输入: \"{PROMPT_TEXT}\" (第 {next_round} 轮)")
+                    print(f"[{timestamp}] 检测到一轮对话结束 (Step {step_idx})，自动输入: \"{PROMPT_TEXT}\" (累计第 {sent_count} 轮)")
                     
                     ok = send_continue(current_conv_id, PROMPT_TEXT)
                     if not ok:
-                        print(f"[{timestamp}] 发送失败，请检查 Language Server 进程，将在稍后重试。")
-                        time.sleep(3.0)
-                    else:
-                        sent_count = next_round
-                        last_handled_step = step_idx
-                        if os.name == 'nt':
-                            try:
-                                import winsound
-                                winsound.MessageBeep(winsound.MB_ICONASTERISK)
-                            except Exception:
-                                pass
+                        print(f"[{timestamp}] 发送失败，请检查 Language Server 进程。")
+
+                    # 播放轻微提示音
+                    if os.name == 'nt':
+                        try:
+                            import winsound
+                            winsound.MessageBeep(winsound.MB_ICONASTERISK)
+                        except Exception:
+                            pass
                     
                     idle_start_time = None
 

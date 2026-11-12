@@ -16,16 +16,6 @@ import subprocess
 from enum import Enum
 from typing import Dict, Any, List, Optional, Tuple, Callable
 
-from ls_discovery import (
-    resolve_brain_dir,
-    resolve_ls_exe,
-    resolve_agentapi_bat,
-    get_active_ls_env,
-    build_clean_agentapi_env,
-    load_conversation_summaries,
-    get_conversation_summary,
-)
-
 
 class AgentState(Enum):
     UNKNOWN = "UNKNOWN"
@@ -67,12 +57,15 @@ class AntigravityWatcher:
         self.on_turn_continue = on_turn_continue
         self.on_log = on_log
 
-        # Locate paths (supports Antigravity 2.0 ~/.gemini/antigravity and legacy ~/.gemini/antigravity-ide)
+        # Locate paths
         self.user_home = os.path.expanduser("~")
+        self.brain_dir = os.path.join(self.user_home, ".gemini", "antigravity-ide", "brain")
         self.local_app_data = os.environ.get("LOCALAPPDATA", os.path.join(self.user_home, "AppData", "Local"))
-        self.brain_dir = resolve_brain_dir()
-        self.language_server_exe = resolve_ls_exe()
-        self.agentapi_bat = resolve_agentapi_bat()
+        self.language_server_exe = os.path.join(
+            self.local_app_data, "Programs", "Antigravity IDE", "resources", "app",
+            "extensions", "antigravity", "bin", "language_server_windows_x64.exe"
+        )
+        self.agentapi_bat = os.path.join(self.user_home, ".gemini", "antigravity-ide", "bin", "agentapi.bat")
 
         # State tracking
         self.conversation_id = conversation_id
@@ -92,12 +85,11 @@ class AntigravityWatcher:
             timestamp = time.strftime("%H:%M:%S")
             print(f"[{timestamp}] [{level}] {message}")
 
-    def list_recent_conversations(self, limit: int = 10, include_subagents: bool = False) -> List[Dict[str, Any]]:
+    def list_recent_conversations(self, limit: int = 10) -> List[Dict[str, Any]]:
         """List recently active conversations sorted by modification time."""
         if not os.path.exists(self.brain_dir):
             return []
 
-        summaries = load_conversation_summaries()
         results = []
         for entry in os.listdir(self.brain_dir):
             full_path = os.path.join(self.brain_dir, entry)
@@ -105,20 +97,14 @@ class AntigravityWatcher:
                 continue
             transcript_file = os.path.join(full_path, ".system_generated", "logs", "transcript.jsonl")
             if os.path.exists(transcript_file):
-                meta = summaries.get(entry, {})
-                if not include_subagents and meta.get("is_subagent"):
-                    continue
                 mtime = os.path.getmtime(transcript_file)
-                snippet = meta.get("title") or meta.get("preview") or self._get_conversation_preview(transcript_file)
+                snippet = self._get_conversation_preview(transcript_file)
                 results.append({
                     "id": entry,
                     "transcript_path": transcript_file,
                     "mtime": mtime,
                     "mtime_str": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(mtime)),
-                    "preview": snippet,
-                    "workspace": meta.get("workspace", ""),
-                    "db_status": meta.get("status", ""),
-                    "is_subagent": bool(meta.get("is_subagent")),
+                    "preview": snippet
                 })
 
         results.sort(key=lambda x: x["mtime"], reverse=True)
@@ -212,26 +198,15 @@ class AntigravityWatcher:
 
         # Check if model explicitly called ask_question
         if self.pause_on_question and any(
-            isinstance(call, dict) and "ask_question" in str(call.get("name") or call.get("tool") or "")
+            isinstance(call, dict) and "ask_question" in call.get("name", "")
             for call in (tool_calls or [])
         ):
-            self.first_idle_time = 0.0
             return AgentState.WAITING_DECISION, "模型正在等待用户回答问题 (ask_question)"
-
-        # Check Antigravity 2.0 conversation_summaries.db live status (catches background tasks)
-        db_running = False
-        if self.conversation_id:
-            summary = get_conversation_summary(self.conversation_id)
-            if summary:
-                db_st = summary.get("status", "")
-                not_idle = bool(summary.get("not_fully_idle", False))
-                if db_st in ("CASCADE_RUN_STATUS_RUNNING", "CASCADE_RUN_STATUS_BUSY", "CASCADE_RUN_STATUS_CANCELING") or not_idle:
-                    db_running = True
 
         # Check if currently executing tool or pending response
         is_tool_running = step_type not in ["PLANNER_RESPONSE", "USER_INPUT"]
         has_pending_tools = len(tool_calls) > 0
-        is_model_done = (step_type == "PLANNER_RESPONSE" and status == "DONE" and not has_pending_tools and not db_running)
+        is_model_done = (step_type == "PLANNER_RESPONSE" and status == "DONE" and not has_pending_tools)
 
         # Check completion keywords in model final content
         if is_model_done and content:
@@ -240,10 +215,9 @@ class AntigravityWatcher:
                 if kw in lower_content:
                     return AgentState.COMPLETED, f"检测到任务完成关键字: 【{kw}】"
 
-        if is_tool_running or has_pending_tools or db_running or (not is_model_done):
+        if is_tool_running or has_pending_tools or (not is_model_done):
             self.first_idle_time = 0.0
-            reason = "后台任务/子代理执行中" if db_running else f"模型正在执行中 (Step {self.last_step_index}, {step_type})"
-            return AgentState.BUSY, reason
+            return AgentState.BUSY, f"模型正在执行中 (Step {self.last_step_index}, {step_type})"
 
         # If model is done, verify idle stability delay
         if self.first_idle_time == 0.0:
@@ -263,13 +237,12 @@ class AntigravityWatcher:
     def send_continue_prompt(self, custom_prompt: Optional[str] = None) -> bool:
         """Send continuation message into Antigravity IDE conversation queue."""
         prompt_to_send = custom_prompt or self.continue_prompt
-        next_turn = self.turn_count + 1
+        self.turn_count += 1
 
-        self.log(f"触发第 {next_turn} 轮自动继续...", "INFO")
+        self.log(f"触发第 {self.turn_count} 轮自动继续...", "INFO")
         success = self._send_message_via_agentapi(prompt_to_send)
 
         if success:
-            self.turn_count = next_turn
             if self.on_turn_continue:
                 self.on_turn_continue(self.turn_count, prompt_to_send)
             self._play_chime()
@@ -298,8 +271,14 @@ class AntigravityWatcher:
                 startupinfo = subprocess.STARTUPINFO()
                 startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
 
-            addr, token = get_active_ls_env()
-            run_env = build_clean_agentapi_env(addr=addr, token=token)
+            run_env = os.environ.copy()
+            try:
+                import web_server
+                addr, token = web_server.get_active_ls_env()
+                if addr: run_env["ANTIGRAVITY_LS_ADDRESS"] = addr
+                if token: run_env["ANTIGRAVITY_CSRF_TOKEN"] = token
+            except Exception:
+                pass
 
             res = subprocess.run(
                 cmd,
@@ -307,7 +286,6 @@ class AntigravityWatcher:
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                stdin=subprocess.DEVNULL,
                 env=run_env,
                 startupinfo=startupinfo,
                 timeout=15

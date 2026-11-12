@@ -56,18 +56,9 @@ const convPreviewSnippet = document.getElementById('convPreviewSnippet');
 const convCountHint = document.getElementById('convCountHint');
 const refreshConvsBtn = document.getElementById('refreshConvsBtn');
 const hideEmptyCheckbox = document.getElementById('hideEmptyCheckbox');
-const hideSubagentsCheckbox = document.getElementById('hideSubagentsCheckbox');
 const addSessionToFleetBtn = document.getElementById('addSessionToFleetBtn');
-const addMonitorOnlyBtn = document.getElementById('addMonitorOnlyBtn');
-
-const radarGrid = document.getElementById('radarGrid');
-const radarCountBadge = document.getElementById('radarCountBadge');
-const refreshRadarBtn = document.getElementById('refreshRadarBtn');
 
 const promptInput = document.getElementById('promptInput');
-const saveCustomPromptBtn = document.getElementById('saveCustomPromptBtn');
-const promptMacroBar = document.getElementById('promptMacroBar');
-const enrollTagsInput = document.getElementById('enrollTagsInput');
 const cooldownInput = document.getElementById('cooldownInput');
 const maxTurnsInput = document.getElementById('maxTurnsInput');
 const soundAlertCheckbox = document.getElementById('soundAlertCheckbox');
@@ -82,7 +73,6 @@ const countAll = document.getElementById('countAll');
 const countActive = document.getElementById('countActive');
 const countBusy = document.getElementById('countBusy');
 const countStopped = document.getElementById('countStopped');
-const countAttention = document.getElementById('countAttention');
 const countLocal = document.getElementById('countLocal');
 const countSsh = document.getElementById('countSsh');
 
@@ -241,15 +231,13 @@ async function fetchStatus() {
   } catch (e) {}
 }
 
-async function fetchConversations(force = false) {
+async function fetchConversations() {
   try {
     const node = appState.node_type || 'local';
-    const url = `/api/conversations?node=${encodeURIComponent(node)}${force ? '&force=1' : ''}`;
-    const res = await safeFetch(url, {}, 7000);
+    const res = await safeFetch(`/api/conversations?node=${encodeURIComponent(node)}`, {}, 7000);
     if (!res.ok) return;
     conversationsList = await res.json();
     renderConversationsDropdown();
-    renderRadarList();
   } catch (e) {}
 }
 
@@ -262,15 +250,6 @@ async function fetchLogs() {
   } catch (e) {}
 }
 
-function formatWorkspaceShort(ws) {
-  if (!ws) return '';
-  const clean = ws.replace(/\\/g, '/').replace(/\/+$/, '');
-  if (/^[A-Za-z]:$/.test(clean)) return clean + '/';
-  const parts = clean.split('/').filter(Boolean);
-  if (parts.length >= 2) return parts[parts.length - 1];
-  return ws;
-}
-
 // ==========================================================================
 // UI 更新渲染
 // ==========================================================================
@@ -281,30 +260,26 @@ function updateUIWithStatus(status) {
   const totalCount = status.total_count || 0;
   const busyCount = status.busy_count || 0;
   const stabilizingCount = status.stabilizing_count || 0;
-  const errorCount = status.error_count || 0;
   const totalSent = status.total_sent_count || 0;
 
   // 1. 顶部 Header 状态
   if (activeCount > 0) {
     mainStatusPill.className = 'status-pill running';
-    mainStatusText.innerText = `${activeCount} 会话自动巡航中`;
-  } else if (totalCount > 0) {
-    mainStatusPill.className = 'status-pill stabilizing';
-    mainStatusText.innerText = `${totalCount} 会话仅监控中`;
+    mainStatusText.innerText = `${activeCount} 会话并发巡航中`;
   } else {
     mainStatusPill.className = 'status-pill stopped';
-    mainStatusText.innerText = '0 会话纳管 (已待命)';
+    mainStatusText.innerText = '0 会话运行 (已待命)';
   }
 
   // LSP API 状态
   if (status.lsp_ok) {
     lspStatusBadge.style.color = '#a5f3fc';
     lspStatusBadge.style.borderColor = 'rgba(6, 182, 212, 0.3)';
-    lspStatusText.innerText = status.lsp_addr ? `LSP: ${status.lsp_addr}` : 'LSP API: 就绪';
+    lspStatusText.innerText = 'LSP API: 就绪';
   } else {
     lspStatusBadge.style.color = '#fca5a5';
     lspStatusBadge.style.borderColor = 'rgba(244, 63, 94, 0.4)';
-    lspStatusText.innerText = status.lsp_bin_ok ? 'LSP 服务未运行' : 'LSP API: 未检测到';
+    lspStatusText.innerText = 'LSP API: 未检测到';
   }
 
   // 2. 指标卡片
@@ -312,9 +287,8 @@ function updateUIWithStatus(status) {
     metricFleetVal.innerHTML = `${activeCount} / ${totalCount} <span class="unit">巡航</span>`;
   }
   if (metricFleetDetail) {
-    if (totalCount > 0) {
-      const errSuffix = errorCount > 0 ? ` · ${errorCount} 异常` : '';
-      metricFleetDetail.innerText = `${busyCount} 运行中 · ${stabilizingCount} 冷却中${errSuffix}`;
+    if (activeCount > 0) {
+      metricFleetDetail.innerText = `${busyCount} 思考中 · ${stabilizingCount} 冷却中 · ${activeCount - busyCount - stabilizingCount} 就绪`;
     } else {
       metricFleetDetail.innerText = '全矩阵处于待命或暂停状态';
     }
@@ -332,8 +306,7 @@ function updateUIWithStatus(status) {
       const top = activeWithStep[0];
       metricStepVal.innerText = `Step ${top.current_step}`;
       if (metricStepDetail) {
-        const wsShort = top.workspace ? formatWorkspaceShort(top.workspace) : (top.node_type.startsWith('ssh:') ? top.node_type.slice(4) : '本地');
-        metricStepDetail.innerText = `[${wsShort}] ${(top.title || '').slice(0, 18)}`;
+        metricStepDetail.innerText = `[${top.node_type.startsWith('ssh:') ? '恒源云' : '本地'}] ${top.title.slice(0, 16)}...`;
       }
     } else {
       metricStepVal.innerText = 'Step --';
@@ -341,21 +314,15 @@ function updateUIWithStatus(status) {
     }
   }
 
-  // 节点与数据源分布统计
+  // 节点分布统计
   if (metricNodeDist) {
     const localCount = sessions.filter(s => !s.node_type.startsWith('ssh:')).length;
     const remoteCount = sessions.filter(s => s.node_type.startsWith('ssh:')).length;
-    metricNodeDist.innerText = `${localCount} 本地 + ${remoteCount} 远程`;
-  }
-  if (metricNodeDetail) {
-    const dbText = status.summaries_db_exists ? 'DB索引正常' : '纯日志模式';
-    const lsText = status.lsp_addr ? `LSP ${status.lsp_addr.split(':')[1] || ''}` : 'LSP待检测';
-    metricNodeDetail.innerText = `${dbText} · ${lsText}`;
+    metricNodeDist.innerText = `${localCount} 本地 + ${remoteCount} 恒源云`;
   }
 
-  // 3. 渲染多会话矩阵看板与发现雷达
+  // 3. 渲染多会话矩阵看板
   renderFleetMatrix(sessions);
-  renderRadarList();
 
   // 4. 音频提示与桌面通知：若全量注入增加
   if (totalSent > lastTotalSentCount && lastTotalSentCount > 0) {
@@ -371,22 +338,10 @@ function updateUIWithStatus(status) {
 function renderFleetMatrix(sessions) {
   if (!fleetGrid) return;
 
-  const validIds = new Set((sessions || []).map(s => s.id));
-  Array.from(selectedSessionIds).forEach(cid => {
-    if (!validIds.has(cid)) selectedSessionIds.delete(cid);
-  });
-
-  const isBusyEff = (s) => s.state === 'BUSY' || (!s.enabled && s.live_state === 'BUSY');
-  const isAttentionEff = (s) => (
-    s.state === 'ERROR' || s.state === 'OFFLINE' || s.state === 'WAITING_DECISION' ||
-    !!s.error || s.live_state === 'WAITING_DECISION'
-  );
-
   const total = sessions ? sessions.length : 0;
   const activeCount = sessions ? sessions.filter(s => s.enabled).length : 0;
-  const busyCount = sessions ? sessions.filter(isBusyEff).length : 0;
+  const busyCount = sessions ? sessions.filter(s => s.enabled && s.state === 'BUSY').length : 0;
   const stoppedCount = sessions ? sessions.filter(s => !s.enabled || s.state === 'STOPPED' || s.state === 'COMPLETED').length : 0;
-  const attentionCount = sessions ? sessions.filter(isAttentionEff).length : 0;
   const localCount = sessions ? sessions.filter(s => !s.node_type || !s.node_type.startsWith('ssh:')).length : 0;
   const sshCount = sessions ? sessions.filter(s => s.node_type && s.node_type.startsWith('ssh:')).length : 0;
 
@@ -394,12 +349,11 @@ function renderFleetMatrix(sessions) {
   if (countActive) countActive.innerText = activeCount;
   if (countBusy) countBusy.innerText = busyCount;
   if (countStopped) countStopped.innerText = stoppedCount;
-  if (countAttention) countAttention.innerText = attentionCount;
   if (countLocal) countLocal.innerText = localCount;
   if (countSsh) countSsh.innerText = sshCount;
 
   if (fleetCountBadge) {
-    fleetCountBadge.innerText = `${activeCount} 巡航 / ${total} 纳管`;
+    fleetCountBadge.innerText = `${activeCount} / ${total} 巡航中`;
   }
 
   if (!sessions || sessions.length === 0) {
@@ -407,13 +361,12 @@ function renderFleetMatrix(sessions) {
       <div class="fleet-empty-state">
         <span class="empty-icon">🛸</span>
         <div class="empty-title">当前并发监控池为空</div>
-        <div class="empty-sub">您还没有纳管任何会话。可直接在下方【Antigravity 会话实时雷达】或【纳管新会话】中一键开启实时监控或自动巡航。</div>
-        <button class="btn-pill-action primary" onclick="document.getElementById('radarSection').scrollIntoView({behavior:'smooth'})" style="margin-top: 6px;">
-          📡 查看发现的 Antigravity 会话
+        <div class="empty-sub">您还没有纳管任何会话。请在下方选择目标会话并点击【➕ 将此会话加入并发监控池】即可开启多线程自动化。</div>
+        <button class="btn-pill-action primary" onclick="document.getElementById('enrollSection').scrollIntoView({behavior:'smooth'})" style="margin-top: 6px;">
+          ➕ 立即纳管第一个会话
         </button>
       </div>
     `;
-    updateBatchBar();
     return;
   }
 
@@ -424,12 +377,11 @@ function renderFleetMatrix(sessions) {
     filtered = filtered.filter(s => {
       const titleMatch = (s.title || '').toLowerCase().includes(q);
       const idMatch = (s.id || '').toLowerCase().includes(q);
-      const wsMatch = (s.workspace || '').toLowerCase().includes(q);
       const nodeMatch = (s.node_type || '').toLowerCase().includes(q);
       const promptMatch = (s.prompt || '').toLowerCase().includes(q);
-      const stateMatch = (s.state || '').toLowerCase().includes(q) || (s.live_state || '').toLowerCase().includes(q);
+      const stateMatch = (s.state || '').toLowerCase().includes(q);
       const tagsMatch = (s.tags || []).some(t => t.toLowerCase().includes(q));
-      return titleMatch || idMatch || wsMatch || nodeMatch || promptMatch || stateMatch || tagsMatch;
+      return titleMatch || idMatch || nodeMatch || promptMatch || stateMatch || tagsMatch;
     });
   }
 
@@ -437,11 +389,9 @@ function renderFleetMatrix(sessions) {
   if (currentFleetFilter === 'active') {
     filtered = filtered.filter(s => s.enabled);
   } else if (currentFleetFilter === 'busy') {
-    filtered = filtered.filter(isBusyEff);
+    filtered = filtered.filter(s => s.enabled && s.state === 'BUSY');
   } else if (currentFleetFilter === 'stopped') {
     filtered = filtered.filter(s => !s.enabled || s.state === 'STOPPED' || s.state === 'COMPLETED');
-  } else if (currentFleetFilter === 'attention') {
-    filtered = filtered.filter(isAttentionEff);
   } else if (currentFleetFilter === 'local') {
     filtered = filtered.filter(s => !s.node_type || !s.node_type.startsWith('ssh:'));
   } else if (currentFleetFilter === 'ssh') {
@@ -497,89 +447,46 @@ function renderFleetMatrix(sessions) {
         <button class="btn-pill-action" onclick="resetFleetFilter()" style="margin-top: 8px;">重置筛选条件</button>
       </div>
     `;
-    updateBatchBar();
     return;
   }
 
   fleetGrid.innerHTML = '';
   filtered.forEach(s => {
     const isRemote = s.node_type && s.node_type.startsWith('ssh:');
-    const nodeLabel = isRemote ? `☁️ ${escapeHtml(s.node_type.slice(4))}` : '🖥️ 本地';
+    const nodeLabel = isRemote ? '☁️ 恒源云西区' : '🖥️ 本地开发';
     const nodeClass = isRemote ? 'remote' : 'local';
-    const wsShort = s.workspace ? formatWorkspaceShort(s.workspace) : '';
-    const wsChipHtml = wsShort
-      ? `<span class="workspace-chip" title="工作区: ${escapeHtml(s.workspace)}">📁 ${escapeHtml(wsShort)}</span>`
-      : '';
 
     const tagsHtml = (s.tags && s.tags.length > 0)
       ? s.tags.map(t => `<span class="session-tag-chip" title="分类标签: ${escapeHtml(t)}">#${escapeHtml(t)}</span>`).join('')
       : '';
 
     let velocityHtml = '';
-    const effectiveBusy = s.state === 'BUSY' || (!s.enabled && s.live_state === 'BUSY');
     if (s.step_velocity && s.step_velocity > 0) {
       velocityHtml = `<span class="velocity-badge pulse" title="当前推进速率: 每分钟约 ${s.step_velocity} 步">⚡ +${s.step_velocity} 步/分</span>`;
-    } else if (effectiveBusy && (s.busy_duration || 0) > 90) {
+    } else if (s.state === 'BUSY' && (s.busy_duration || 0) > 90) {
       velocityHtml = `<span class="velocity-badge thinking" title="深度运算与规划中">⏳ 深度运算</span>`;
-    }
-
-    const dur = s.busy_duration || 0;
-    let durText = '';
-    if (dur >= 60) {
-      durText = ` · ${Math.floor(dur / 60)}m ${dur % 60}s`;
-    } else if (dur > 0) {
-      durText = ` · ${dur}s`;
     }
 
     let statusText = '就绪待命';
     let statusClass = 'idle';
     let cardStateClass = '';
 
-    const isBgActive = Boolean(s.not_fully_idle && s.db_status === 'CASCADE_RUN_STATUS_IDLE');
-
     if (!s.enabled) {
-      const ls = s.live_state || 'UNKNOWN';
-      if (s.state === 'COMPLETED' || ls === 'COMPLETED') {
-        statusText = '🎉 任务已完工';
-        statusClass = 'completed';
-      } else if (ls === 'BUSY') {
-        statusText = isBgActive
-          ? `👁️ 仅监控 · ⏳ 后台任务活跃${durText}`
-          : `👁️ 仅监控 · ⚡ 运行中${durText}`;
-        statusClass = 'monitor';
-        cardStateClass = 'busy';
-      } else if (ls === 'WAITING_DECISION') {
-        statusText = '👁️ 仅监控 · ❓ 待人工回答';
-        statusClass = 'waiting';
-        cardStateClass = 'waiting';
-      } else if (ls === 'OFFLINE') {
-        statusText = '👁️ 仅监控 · ⚠️ 离线/缺失';
-        statusClass = 'offline';
-      } else if (ls === 'EMPTY') {
-        statusText = '👁️ 仅监控 · 🌱 空白未开始';
-        statusClass = 'stopped';
-      } else if (ls === 'IDLE') {
-        statusText = '👁️ 仅监控 · 🟢 会话空闲';
-        statusClass = 'monitor';
-      } else {
-        statusText = '👁️ 仅监控 (检测状态中)';
-        statusClass = 'stopped';
-      }
+      statusText = '已暂停';
+      statusClass = 'stopped';
     } else if (s.state === 'BUSY') {
-      statusText = isBgActive
-        ? `⏳ 后台任务活跃 (Step ${s.current_step}${durText})`
-        : `⚡ 思考执行中 (Step ${s.current_step}${durText})`;
+      const dur = s.busy_duration || 0;
+      let durText = '';
+      if (dur >= 60) {
+        const m = Math.floor(dur / 60);
+        const sec = dur % 60;
+        durText = ` · ${m}m ${sec}s`;
+      } else if (dur > 0) {
+        durText = ` · ${dur}s`;
+      }
+      statusText = `⚡ 思考执行中 (Step ${s.current_step}${durText})`;
       statusClass = dur > 300 ? 'busy stalled' : 'busy';
       cardStateClass = 'busy';
-    } else if (s.state === 'WAITING_DECISION') {
-      statusText = '❓ 等待人工回答 (ask_question)';
-      statusClass = 'waiting';
-      cardStateClass = 'waiting';
-    } else if (s.state === 'ERROR') {
-      const retryHint = s.cooldown_remaining > 0 ? ` · ${s.cooldown_remaining}s后重试` : '';
-      statusText = `❌ 注入失败${retryHint}`;
-      statusClass = 'error';
-      cardStateClass = 'error';
     } else if (s.state === 'STABILIZING') {
       statusText = `⏱ 冷却中 (${s.cooldown_remaining}s)`;
       statusClass = 'stabilizing';
@@ -592,7 +499,7 @@ function renderFleetMatrix(sessions) {
       statusText = '🎉 任务已完工';
       statusClass = 'completed';
     } else if (s.state === 'OFFLINE') {
-      statusText = '⚠️ 节点离线 / 日志缺失';
+      statusText = '⚠️ 节点离线';
       statusClass = 'offline';
     } else {
       statusText = '🟢 就绪监听';
@@ -615,14 +522,6 @@ function renderFleetMatrix(sessions) {
       `;
     }
 
-    const snippetHtml = s.last_snippet
-      ? `<div class="fleet-card-snippet" title="${escapeHtml(s.last_snippet)}">📝 ${escapeHtml(s.last_snippet)}</div>`
-      : '';
-
-    const errorHtml = s.error
-      ? `<div class="fleet-card-error" title="${escapeHtml(s.error)}">⚠️ 最近异常: ${escapeHtml(s.error)}</div>`
-      : '';
-
     card.innerHTML = `
       <div class="fleet-card-header">
         <div class="fleet-card-tags">
@@ -630,14 +529,13 @@ function renderFleetMatrix(sessions) {
             <input type="checkbox" class="card-select-checkbox" data-cid="${s.id}" ${selectedSessionIds.has(s.id) ? 'checked' : ''}>
           </label>
           <span class="node-chip ${nodeClass}">${nodeLabel}</span>
-          ${wsChipHtml}
-          ${s.node_type.startsWith('ssh:') ? `<span class="node-ping-badge" onclick="pingSshNode('${escapeHtml(escapeJsStr(s.node_type))}', this)" title="点击测试远程 SSH 连通性与网络延迟">⚡ 测速</span>` : ''}
+          ${s.node_type.startsWith('ssh:') ? `<span class="node-ping-badge" onclick="pingSshNode('${escapeHtml(s.node_type)}', this)" title="点击测试远程 SSH 连通性与网络延迟">⚡ 测速</span>` : ''}
           ${tagsHtml}
-          <span class="conv-id-chip" title="点击复制完整会话ID: ${escapeHtml(s.id)}" onclick="copyText('${escapeHtml(escapeJsStr(s.id))}')">${escapeHtml(s.id.slice(0, 8))}...</span>
+          <span class="conv-id-chip" title="点击复制完整会话ID" onclick="copyText('${s.id}')">${s.id.slice(0, 8)}...</span>
         </div>
         <div style="display: flex; gap: 8px; align-items: center;">
-          <button class="pin-btn ${s.pinned ? 'pinned' : ''}" onclick="toggleSessionPin('${escapeHtml(escapeJsStr(s.id))}', ${!s.pinned})" title="${s.pinned ? '取消置顶' : '置顶此会话'}">📌</button>
-          <label class="fleet-switch" title="开启/关闭自动注入（关闭后仍保持实时监控）">
+          <button class="pin-btn ${s.pinned ? 'pinned' : ''}" onclick="toggleSessionPin('${s.id}', ${!s.pinned})" title="${s.pinned ? '取消置顶' : '置顶此会话'}">📌</button>
+          <label class="fleet-switch" title="开启/暂停该会话自驱巡航">
             <input type="checkbox" class="session-toggle" data-cid="${s.id}" ${s.enabled ? 'checked' : ''}>
             <span class="fleet-slider"></span>
           </label>
@@ -646,7 +544,7 @@ function renderFleetMatrix(sessions) {
 
       <div class="fleet-card-title" title="${escapeHtml(s.title)}">
         <span class="title-text">${escapeHtml(s.title)}</span>
-        <button class="btn-rename" onclick="handleInlineRename('${escapeHtml(escapeJsStr(s.id))}')" title="重命名会话">✏️</button>
+        <button class="btn-rename" onclick="handleInlineRename('${s.id}', '${escapeHtml(s.title)}')" title="重命名会话">✏️</button>
       </div>
 
       <div class="fleet-card-status-row">
@@ -660,12 +558,10 @@ function renderFleetMatrix(sessions) {
       </div>
 
       ${cooldownBarHtml}
-      ${snippetHtml}
-      ${errorHtml}
 
       <div class="fleet-card-stats">
         <div class="stat-cell">
-          <span class="stat-cell-label">已成功注入</span>
+          <span class="stat-cell-label">已注入</span>
           <span class="stat-cell-val">${s.sent_count} 轮</span>
         </div>
         <div class="stat-cell">
@@ -683,19 +579,19 @@ function renderFleetMatrix(sessions) {
       </div>
 
       <div class="fleet-card-actions">
-        <button class="btn-card-action" onclick="handleCardTranscript('${escapeHtml(escapeJsStr(s.id))}', '${escapeHtml(escapeJsStr(s.node_type))}')" title="查看该会话最新步骤与转录回溯">
+        <button class="btn-card-action" onclick="handleCardTranscript('${s.id}', '${s.node_type}')" title="查看该会话最新步骤与转录回溯">
           📜 进展
         </button>
-        <button class="btn-card-action" onclick="handleCardClone('${escapeHtml(escapeJsStr(s.id))}')" title="克隆该会话参数至新建表单">
+        <button class="btn-card-action" onclick="handleCardClone('${s.id}')" title="克隆该会话参数至新建表单">
           📑 克隆
         </button>
-        <button class="btn-card-action primary" onclick="handleCardTrigger('${escapeHtml(escapeJsStr(s.id))}')" title="立即向该会话发送一次指令">
+        <button class="btn-card-action primary" onclick="handleCardTrigger('${s.id}')" title="立即向该会话发送一次指令">
           ⚡ 立即注入
         </button>
-        <button class="btn-card-action" onclick="handleCardEdit('${escapeHtml(escapeJsStr(s.id))}')" title="修改该会话提示词与冷却参数">
+        <button class="btn-card-action" onclick="handleCardEdit('${s.id}')" title="修改该会话提示词与冷却参数">
           ⚙️ 配置
         </button>
-        <button class="btn-card-action danger" onclick="handleCardRemove('${escapeHtml(escapeJsStr(s.id))}')" title="移出并发监控池">
+        <button class="btn-card-action danger" onclick="handleCardRemove('${s.id}')" title="移出并发监控池">
           🗑️ 移出
         </button>
       </div>
@@ -1189,9 +1085,7 @@ window.toggleSessionPin = async function(cid, pinned) {
   }
 };
 
-window.handleInlineRename = async function(cid) {
-  const s = (appState.sessions || []).find(item => item.id === cid);
-  const currentTitle = s ? s.title : '';
+window.handleInlineRename = async function(cid, currentTitle) {
   const newTitle = prompt('请输入会话新名称:', currentTitle || '');
   if (newTitle === null || !newTitle.trim()) return;
   try {
@@ -1211,12 +1105,14 @@ window.handleInlineRename = async function(cid) {
 };
 
 window.handleCardClone = function(cid) {
-  const s = (appState.sessions || []).find(item => item.id === cid);
+  const s = appState.sessions.find(item => item.id === cid);
   if (!s) return;
+  const promptInput = document.getElementById('enrollPromptInput');
+  const cooldownInput = document.getElementById('enrollCooldownInput');
+  const maxTurnsInput = document.getElementById('enrollMaxTurnsInput');
   if (promptInput) promptInput.value = s.prompt || '';
   if (cooldownInput) cooldownInput.value = s.cooldown || 3.0;
   if (maxTurnsInput) maxTurnsInput.value = s.max_turns || 9999;
-  if (enrollTagsInput) enrollTagsInput.value = (s.tags || []).join(', ');
   showToast(`已克隆会话 [${s.title}] 配置参数至纳管表单`, '📑');
   const enrollSec = document.getElementById('enrollSection');
   if (enrollSec) enrollSec.scrollIntoView({ behavior: 'smooth' });
@@ -1312,99 +1208,42 @@ window.handleCardTrigger = async function(cid) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ conv_id: cid, text })
-    }, 15000);
+    });
     const data = await res.json();
     if (data.ok) {
       showToast(`已成功注入会话 [${cid.slice(0, 8)}]`, '⚡');
       playChime(659.2);
     } else {
-      showToast(`注入失败: ${data.error || '请检查会话或节点状态'}`, '⚠️');
+      showToast('注入失败，请检查会话或节点状态', '⚠️');
     }
     fetchStatus();
     fetchLogs();
   } catch (e) {
-    showToast('注入请求异常: ' + e.message, '✖');
+    showToast('注入请求异常', '✖');
   }
 };
-
-// Session Edit Modal Elements
-const sessionEditModal = document.getElementById('sessionEditModal');
-const sessionEditModalTitle = document.getElementById('sessionEditModalTitle');
-const editSessionCid = document.getElementById('editSessionCid');
-const editSessionTitle = document.getElementById('editSessionTitle');
-const editSessionPrompt = document.getElementById('editSessionPrompt');
-const editSessionCooldown = document.getElementById('editSessionCooldown');
-const editSessionMaxTurns = document.getElementById('editSessionMaxTurns');
-const editSessionTags = document.getElementById('editSessionTags');
-const editSessionPinned = document.getElementById('editSessionPinned');
-const editPromptMacroBar = document.getElementById('editPromptMacroBar');
-const saveEditPromptMacroBtn = document.getElementById('saveEditPromptMacroBtn');
-const closeSessionEditModalBtn = document.getElementById('closeSessionEditModalBtn');
-const cancelSessionEditBtn = document.getElementById('cancelSessionEditBtn');
-const saveSessionEditBtn = document.getElementById('saveSessionEditBtn');
 
 window.handleCardEdit = function(cid) {
-  const s = (appState.sessions || []).find(item => item.id === cid);
+  const s = appState.sessions.find(item => item.id === cid);
   if (!s) return;
-  if (!sessionEditModal) return;
-  if (sessionEditModalTitle) sessionEditModalTitle.textContent = `配置会话 · ${(s.title || cid.slice(0, 8)).slice(0, 22)}`;
-  if (editSessionCid) editSessionCid.value = s.id;
-  if (editSessionTitle) editSessionTitle.value = s.title || '';
-  if (editSessionPrompt) editSessionPrompt.value = s.prompt || '继续';
-  if (editSessionCooldown) editSessionCooldown.value = s.cooldown || 3.0;
-  if (editSessionMaxTurns) editSessionMaxTurns.value = s.max_turns || 9999;
-  if (editSessionTags) editSessionTags.value = (s.tags || []).join(', ');
-  if (editSessionPinned) editSessionPinned.checked = !!s.pinned;
-  renderMacroBars();
-  sessionEditModal.style.display = 'flex';
-};
+  const newPrompt = window.prompt(`修改会话 [${s.title.slice(0, 15)}] 的自动注入指令:`, s.prompt);
+  if (newPrompt === null) return;
+  const newCooldown = window.prompt(`修改消抖冷却时间 (秒):`, s.cooldown);
+  if (newCooldown === null) return;
 
-function initSessionEditModal() {
-  const closeFn = () => {
-    if (sessionEditModal) sessionEditModal.style.display = 'none';
-  };
-  if (closeSessionEditModalBtn) closeSessionEditModalBtn.addEventListener('click', closeFn);
-  if (cancelSessionEditBtn) cancelSessionEditBtn.addEventListener('click', closeFn);
-  if (sessionEditModal) {
-    sessionEditModal.addEventListener('click', (e) => {
-      if (e.target === sessionEditModal) closeFn();
-    });
-  }
-  if (saveSessionEditBtn) {
-    saveSessionEditBtn.addEventListener('click', async () => {
-      const cid = editSessionCid ? editSessionCid.value : '';
-      if (!cid) return;
-      saveSessionEditBtn.disabled = true;
-      try {
-        const res = await safeFetch('/api/sessions/update', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            conv_id: cid,
-            title: editSessionTitle ? editSessionTitle.value.trim() : undefined,
-            prompt: editSessionPrompt ? (editSessionPrompt.value.trim() || '继续') : '继续',
-            cooldown: editSessionCooldown ? (parseFloat(editSessionCooldown.value) || 3.0) : 3.0,
-            max_turns: editSessionMaxTurns ? (parseInt(editSessionMaxTurns.value, 10) || 9999) : 9999,
-            tags: editSessionTags ? editSessionTags.value : '',
-            pinned: editSessionPinned ? editSessionPinned.checked : false
-          })
-        });
-        const data = await res.json();
-        if (data.ok) {
-          showToast('会话配置已保存更新！', '⚙️');
-          closeFn();
-          fetchStatus();
-        } else {
-          showToast('更新会话失败', '⚠️');
-        }
-      } catch (e) {
-        showToast('更新异常: ' + e.message, '✖');
-      } finally {
-        saveSessionEditBtn.disabled = false;
-      }
-    });
-  }
-}
+  safeFetch('/api/sessions/update', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      conv_id: cid,
+      prompt: newPrompt.trim() || '继续',
+      cooldown: parseFloat(newCooldown) || 3.0
+    })
+  }).then(() => {
+    showToast('会话配置已更新！', '⚙️');
+    fetchStatus();
+  });
+};
 
 window.handleCardRemove = async function(cid) {
   if (!confirm(`确定将该会话从并发监控池移出吗？`)) return;
@@ -1612,148 +1451,8 @@ if (copyTranscriptBtn) {
 }
 
 // ==========================================================================
-// 会话发现雷达 & 下拉列表渲染 (Antigravity Live Sessions)
+// 会话下拉列表渲染
 // ==========================================================================
-function filterDiscoveredConversations() {
-  const hideEmpty = hideEmptyCheckbox ? hideEmptyCheckbox.checked : true;
-  const hideSubagents = hideSubagentsCheckbox ? hideSubagentsCheckbox.checked : true;
-  return (conversationsList || []).filter(c => {
-    if (hideEmpty && (c.is_empty || c.step_count === 0)) return false;
-    if (hideSubagents && c.is_subagent) return false;
-    return true;
-  });
-}
-
-window.quickEnrollSession = async function(cid, enabled = true) {
-  const node_type = appState.node_type || 'local';
-  const prompt = (promptInput ? promptInput.value.trim() : '') || '继续推进下一项任务';
-  const cooldown = (cooldownInput ? parseFloat(cooldownInput.value) : 3.0) || 3.0;
-  const max_turns = (maxTurnsInput ? parseInt(maxTurnsInput.value, 10) : 9999) || 9999;
-  const found = (conversationsList || []).find(c => c.id === cid);
-  const title = found ? (found.title || found.preview) : `会话·${cid.slice(0, 8)}`;
-
-  try {
-    const res = await safeFetch('/api/sessions/add', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        conv_id: cid,
-        node_type,
-        title,
-        prompt,
-        cooldown,
-        max_turns,
-        enabled
-      })
-    });
-    const data = await res.json();
-    if (data.ok) {
-      showToast(`已将 [${title.slice(0, 14)}] 加入${enabled ? '自动巡航' : '仅实时监控'}！`, enabled ? '🚀' : '👁️');
-      playChime(enabled ? 659.2 : 523.2);
-      fetchStatus();
-      fetchLogs();
-    } else {
-      showToast('加入会话失败', '⚠️');
-    }
-  } catch (e) {
-    showToast('请求异常: ' + e.message, '✖');
-  }
-};
-
-function renderRadarList() {
-  if (!radarGrid) return;
-  const displayList = filterDiscoveredConversations();
-  const totalMain = (conversationsList || []).filter(c => !c.is_subagent).length;
-  const subCount = (conversationsList || []).filter(c => c.is_subagent).length;
-
-  if (radarCountBadge) {
-    radarCountBadge.innerText = `显示 ${displayList.length} / 主会话 ${totalMain}` + (subCount > 0 ? ` · 含子代理 ${subCount}` : '');
-  }
-
-  if (displayList.length === 0) {
-    radarGrid.innerHTML = `<div class="radar-empty">🔍 当前过滤条件下未发现 Antigravity 活动会话</div>`;
-    return;
-  }
-
-  const monitoredById = {};
-  (appState.sessions || []).forEach(s => { monitoredById[s.id] = s; });
-
-  radarGrid.innerHTML = '';
-  displayList.slice(0, 12).forEach(c => {
-    const monitored = monitoredById[c.id];
-    const effLive = (monitored && monitored.live_state && monitored.live_state !== 'UNKNOWN') ? monitored.live_state : c.live_state;
-    const isBusy = effLive === 'BUSY';
-    const isWaiting = effLive === 'WAITING_DECISION';
-    const isCompleted = effLive === 'COMPLETED';
-    const isEmpty = effLive === 'EMPTY' || c.is_empty || c.step_count === 0;
-    const isBgOnly = isBusy && Boolean(c.not_fully_idle && c.db_status === 'CASCADE_RUN_STATUS_IDLE');
-    const stateClass = isBusy ? 'busy' : (isWaiting ? 'waiting' : (isCompleted ? 'completed' : (isEmpty ? 'empty' : 'idle')));
-    const stateText = isBgOnly ? '⏳ 后台活跃' : (isBusy ? '⚡ 运行中' : (isWaiting ? '❓ 待回答' : (isCompleted ? '🎉 已完工' : (isEmpty ? '🌱 空白' : '🟢 空闲'))));
-    const wsShort = c.workspace ? formatWorkspaceShort(c.workspace) : '';
-    const displayTitle = c.title || c.preview || c.id.slice(0, 14);
-    const safeCidJs = escapeHtml(escapeJsStr(c.id));
-    const safeNodeJs = escapeHtml(escapeJsStr(appState.node_type || 'local'));
-
-    let actionBtnsHtml = `
-      <button class="btn-card-action" onclick="handleCardTranscript('${safeCidJs}', '${safeNodeJs}')" title="查看实时对话转录与最近步骤">
-        📜 进展
-      </button>
-    `;
-    if (monitored) {
-      const mLabel = monitored.enabled ? '🟢 巡航中' : '👁️ 监控中';
-      const nextEn = !monitored.enabled;
-      actionBtnsHtml += `
-        <button class="btn-card-action ${monitored.enabled ? '' : 'primary'}" onclick="toggleMonitoredFromRadar('${safeCidJs}', ${nextEn})">
-          ${mLabel} (${monitored.enabled ? '切换仅监控' : '开启巡航'})
-        </button>
-      `;
-    } else {
-      actionBtnsHtml += `
-        <button class="btn-card-action" onclick="quickEnrollSession('${safeCidJs}', false)" title="仅实时监控状态，不自动注入">
-          👁️ 仅监控
-        </button>
-        <button class="btn-card-action primary" onclick="quickEnrollSession('${safeCidJs}', true)" title="加入矩阵并启用自动续写">
-          🚀 自动巡航
-        </button>
-      `;
-    }
-
-    const card = document.createElement('div');
-    card.className = `radar-card ${isBusy ? 'busy' : ''}`;
-    card.innerHTML = `
-      <div class="radar-card-top">
-        <div class="radar-card-badges">
-          <span class="radar-state-pill ${stateClass}">${stateText}</span>
-          ${wsShort ? `<span class="workspace-chip" title="${escapeHtml(c.workspace)}">📁 ${escapeHtml(wsShort)}</span>` : ''}
-          ${c.is_subagent ? `<span class="session-tag-chip">🤖 ${escapeHtml(c.agent_name || 'subagent')}</span>` : ''}
-        </div>
-        <span class="conv-id-chip" title="复制完整ID: ${escapeHtml(c.id)}" onclick="copyText('${safeCidJs}')">${escapeHtml(c.id.slice(0, 8))}...</span>
-      </div>
-      <div class="radar-card-title" title="${escapeHtml(displayTitle)}">${escapeHtml(displayTitle)}</div>
-      <div class="radar-card-meta">
-        <span>${monitored && monitored.current_step > c.step_count ? monitored.current_step : c.step_count} 步</span>
-        <span>${escapeHtml((c.mtime_str || '').slice(5))}</span>
-      </div>
-      <div class="radar-card-actions">${actionBtnsHtml}</div>
-    `;
-    radarGrid.appendChild(card);
-  });
-}
-
-window.toggleMonitoredFromRadar = async function(cid, enabled) {
-  try {
-    await safeFetch('/api/sessions/toggle', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ conv_id: cid, enabled })
-    });
-    showToast(`会话 ${cid.slice(0, 8)} 已切换为${enabled ? '自动巡航' : '仅监控模式'}`, enabled ? '🚀' : '👁️');
-    fetchStatus();
-  } catch (e) {
-    showToast('切换失败: ' + e.message, '✖');
-  }
-};
-
 function renderConversationsDropdown() {
   if (!convSelect) return;
   const currentVal = convSelect.value;
@@ -1765,42 +1464,41 @@ function renderConversationsDropdown() {
     return;
   }
 
-  let filtered = filterDiscoveredConversations();
+  const hideEmpty = hideEmptyCheckbox ? hideEmptyCheckbox.checked : true;
+  let filtered = hideEmpty
+    ? conversationsList.filter(c => !c.is_empty && c.step_count > 0)
+    : conversationsList;
 
   const searchQuery = convSearchInput ? convSearchInput.value.trim().toLowerCase() : '';
   if (searchQuery) {
     filtered = filtered.filter(c => {
       const idMatch = c.id.toLowerCase().includes(searchQuery);
-      const titleMatch = (c.title || '').toLowerCase().includes(searchQuery);
       const prevMatch = (c.preview || '').toLowerCase().includes(searchQuery);
-      const wsMatch = (c.workspace || '').toLowerCase().includes(searchQuery);
-      return idMatch || titleMatch || prevMatch || wsMatch;
+      return idMatch || prevMatch;
     });
   }
 
   const displayList = filtered;
   const emptyCount = conversationsList.filter(c => c.is_empty || c.step_count === 0).length;
-  const subCount = conversationsList.filter(c => c.is_subagent).length;
 
   if (convCountHint) {
     if (searchQuery) {
       convCountHint.innerText = `搜索匹配到 ${displayList.length} 个会话 (关键词: "${searchQuery}")`;
     } else {
-      convCountHint.innerText = `已显示 ${displayList.length} 个会话 (过滤 ${emptyCount} 空白 / ${subCount} 子代理)`;
+      convCountHint.innerText = hideEmpty 
+        ? `已显示 ${displayList.length} 个有记录会话 (已过滤 ${emptyCount} 个空白会话)` 
+        : `已扫描全部 ${conversationsList.length} 个会话 (含 ${emptyCount} 个空白会话)`;
     }
   }
 
   displayList.forEach((c) => {
     const opt = document.createElement('option');
     opt.value = c.id;
-    const statusIcon = c.live_state === 'BUSY' ? '⚡ ' : (c.is_empty || c.step_count === 0 ? '🌱 ' : '🟢 ');
-    const wsTag = c.workspace ? `[${formatWorkspaceShort(c.workspace)}] ` : '';
-    const subTag = c.is_subagent ? `[🤖 ${c.agent_name || 'sub'}] ` : '';
-    let titleSnippet = c.title || (c.preview && c.preview !== '(无预览内容)' ? c.preview : c.id.slice(0, 14));
+    let titleSnippet = c.preview && c.preview !== '(无预览内容)' ? c.preview : c.id.slice(0, 14);
     if (c.is_empty || c.step_count === 0) {
-      opt.innerText = `[${c.mtime_str.slice(5)}] ${statusIcon}${wsTag}[新建空白会话] (${c.id.slice(0, 8)}...)`;
+      opt.innerText = `[${c.mtime_str.slice(5)}] 🌱 [新建空白会话 · 未发消息] (${c.id.slice(0, 8)}...)`;
     } else {
-      opt.innerText = `[${c.mtime_str.slice(5)}] ${statusIcon}${subTag}${wsTag}${titleSnippet} (${c.step_count}步 · ${c.id.slice(0, 8)})`;
+      opt.innerText = `[${c.mtime_str.slice(5)}] ${titleSnippet} (${c.id.slice(0, 8)}...)`;
     }
     if (c.id === currentVal) {
       opt.selected = true;
@@ -1819,9 +1517,7 @@ function updateSelectedConvPreview() {
   const selectedId = convSelect.value;
   const found = conversationsList.find(c => c.id === selectedId);
   if (found) {
-    const wsText = found.workspace ? `工作区: ${found.workspace} · ` : '';
-    const statusLabel = found.live_state === 'BUSY' ? '⚡运行中' : (found.is_empty ? '🌱空白' : '🟢空闲');
-    convPreviewSnippet.innerText = `[${statusLabel}] ${wsText}${found.title || found.preview} (${found.step_count} 步 · 更新于 ${found.mtime_str})`;
+    convPreviewSnippet.innerText = `会话 [${found.id.slice(0, 8)}] 预览: ${found.preview} (共 ${found.step_count} 步 · 更新于 ${found.mtime_str})`;
   } else {
     convPreviewSnippet.innerText = `当前选定 ID: ${selectedId || '(未指定)'}`;
   }
@@ -1909,102 +1605,24 @@ function initLogConsoleToolbar() {
       renderLogs();
     });
   });
-}
 
-// ==========================================================================
-// 常用提示词宏管理 (Prompt Macros + LocalStorage)
-// ==========================================================================
-const DEFAULT_PROMPT_MACROS = [
-  { label: '🚀 /goal 全局开发', val: '[/goal](slashCommand;goal) 继续全局开发' },
-  { label: '📋 /plan 规划阶段', val: '[/plan](slashCommand;plan) 规划并推进下一阶段' },
-  { label: '⚡ 继续推进任务', val: '继续推进下一项任务' },
-  { label: '🧪 自测与验证', val: '自测代码并验证效果' },
-  { label: '📊 交付总结报告', val: '生成完整交付总结报告' }
-];
-
-function getCustomMacros() {
-  try {
-    const raw = localStorage.getItem('antigravity_custom_macros');
-    const arr = raw ? JSON.parse(raw) : [];
-    return Array.isArray(arr) ? arr : [];
-  } catch (e) {
-    return [];
-  }
-}
-
-function saveCustomMacro(val) {
-  const text = (val || '').trim();
-  if (!text) return;
-  const list = getCustomMacros();
-  if (!list.includes(text)) {
-    list.unshift(text);
-    localStorage.setItem('antigravity_custom_macros', JSON.stringify(list.slice(0, 12)));
-  }
-  renderMacroBars();
-  showToast(`已保存常用指令: ${text.slice(0, 16)}`, '⭐');
-}
-
-function deleteCustomMacro(val) {
-  const list = getCustomMacros().filter(x => x !== val);
-  localStorage.setItem('antigravity_custom_macros', JSON.stringify(list));
-  renderMacroBars();
-}
-
-function renderSingleMacroBar(container, targetInput) {
-  if (!container || !targetInput) return;
-  container.innerHTML = '';
-  DEFAULT_PROMPT_MACROS.forEach(m => {
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'prompt-pill';
-    btn.textContent = m.label;
+  // 绑定提示词快捷药丸点击
+  document.querySelectorAll('.prompt-pill').forEach(btn => {
     btn.addEventListener('click', () => {
-      targetInput.value = m.val;
-      showToast(`已填入预设指令: ${m.val.slice(0, 18)}`, '💬');
+      const val = btn.dataset.val;
+      if (promptInput && val) {
+        promptInput.value = val;
+        showToast(`已填入预设指令: ${val.slice(0, 16)}...`, '💬');
+      }
     });
-    container.appendChild(btn);
   });
-  getCustomMacros().forEach(val => {
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'prompt-pill';
-    btn.innerHTML = `⭐ ${escapeHtml(val.slice(0, 16))}`;
-    btn.title = val;
-    btn.addEventListener('click', () => {
-      targetInput.value = val;
-      showToast(`已填入常用指令: ${val.slice(0, 18)}`, '⭐');
-    });
-    const del = document.createElement('span');
-    del.className = 'prompt-macro-delete';
-    del.textContent = '✕';
-    del.title = '删除常用指令';
-    del.addEventListener('click', (e) => {
-      e.stopPropagation();
-      deleteCustomMacro(val);
-    });
-    btn.appendChild(del);
-    container.appendChild(btn);
-  });
-}
-
-function renderMacroBars() {
-  renderSingleMacroBar(promptMacroBar, promptInput);
-  renderSingleMacroBar(editPromptMacroBar, editSessionPrompt);
 }
 
 function escapeHtml(str) {
-  if (str === null || str === undefined) return '';
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
-function escapeJsStr(str) {
-  if (str === null || str === undefined) return '';
-  return String(str).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  if (!str) return '';
+  return str.replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;');
 }
 
 // ==========================================================================
@@ -2046,93 +1664,75 @@ if (triggerAllBtn) {
   triggerAllBtn.addEventListener('click', async () => {
     const activeSessions = (appState.sessions || []).filter(s => s.enabled);
     if (activeSessions.length === 0) {
-      showToast('当前没有开启巡航的会话，请先启用至少一个会话', '⚠️');
+      showToast('当前没有运行中的会话，请先启用至少一个会话', '⚠️');
       return;
     }
     showToast(`正在向 ${activeSessions.length} 个会话同时发送指令...`, '⚡');
-    const results = await Promise.all(activeSessions.map(async (s) => {
-      try {
-        const res = await safeFetch('/api/sessions/trigger_once', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ conv_id: s.id, text: s.prompt })
-        }, 15000);
-        return await res.json();
-      } catch (e) {
-        return { ok: false, error: e.message };
-      }
-    }));
-    const okCount = results.filter(r => r && r.ok).length;
-    const failCount = results.length - okCount;
-    if (failCount === 0) {
-      showToast(`已成功向 ${okCount} 个活跃会话发送指令！`, '✨');
-    } else {
-      showToast(`全矩阵注入: ${okCount} 成功, ${failCount} 失败（详情见卡片与日志）`, '⚠️');
+    for (const s of activeSessions) {
+      safeFetch('/api/sessions/trigger_once', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ conv_id: s.id, text: s.prompt })
+      });
     }
-    fetchStatus();
-    fetchLogs();
+    setTimeout(() => {
+      showToast(`已向全矩阵发送完成`, '✨');
+      fetchStatus();
+      fetchLogs();
+    }, 600);
   });
 }
 
-// 4. 将选定会话加入监控池 (自动巡航 或 仅监控)
-async function enrollSelectedFromForm(enabled = true) {
-  const conv_id = convSelect.value;
-  if (!conv_id) {
-    showToast('请先选择一个有效的会话', '⚠️');
-    return;
-  }
-
-  const node_type = appState.node_type || 'local';
-  const prompt = (promptInput ? promptInput.value.trim() : '') || '继续推进下一项任务';
-  const cooldown = (cooldownInput ? parseFloat(cooldownInput.value) : 3.0) || 3.0;
-  const max_turns = (maxTurnsInput ? parseInt(maxTurnsInput.value, 10) : 9999) || 9999;
-  const tags = enrollTagsInput ? enrollTagsInput.value.trim() : '';
-
-  const found = conversationsList.find(c => c.id === conv_id);
-  const title = found ? (found.title || found.preview) : `会话·${conv_id.slice(0, 8)}`;
-
-  try {
-    if (addSessionToFleetBtn) addSessionToFleetBtn.disabled = true;
-    if (addMonitorOnlyBtn) addMonitorOnlyBtn.disabled = true;
-    const res = await safeFetch('/api/sessions/add', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        conv_id,
-        node_type,
-        title,
-        prompt,
-        cooldown,
-        max_turns,
-        enabled,
-        tags
-      })
-    });
-    const data = await res.json();
-    if (data.ok) {
-      showToast(`已纳管会话 [${title.slice(0, 14)}] (${enabled ? '自动巡航' : '仅实时监控'})！`, enabled ? '🚀' : '👁️');
-      playChime(enabled ? 659.2 : 523.2);
-      fetchStatus();
-      fetchLogs();
-      if (fleetSection) {
-        fleetSection.scrollIntoView({ behavior: 'smooth' });
-      }
-    } else {
-      showToast('添加失败', '⚠️');
-    }
-  } catch (e) {
-    showToast('请求异常: ' + e.message, '✖');
-  } finally {
-    if (addSessionToFleetBtn) addSessionToFleetBtn.disabled = false;
-    if (addMonitorOnlyBtn) addMonitorOnlyBtn.disabled = false;
-  }
-}
-
+// 4. 将选定会话加入监控池
 if (addSessionToFleetBtn) {
-  addSessionToFleetBtn.addEventListener('click', () => enrollSelectedFromForm(true));
-}
-if (addMonitorOnlyBtn) {
-  addMonitorOnlyBtn.addEventListener('click', () => enrollSelectedFromForm(false));
+  addSessionToFleetBtn.addEventListener('click', async () => {
+    const conv_id = convSelect.value;
+    if (!conv_id) {
+      showToast('请先选择一个有效的会话', '⚠️');
+      return;
+    }
+
+    const node_type = appState.node_type || 'local';
+    const prompt = promptInput.value.trim() || '继续推进下一项任务';
+    const cooldown = parseFloat(cooldownInput.value) || 3.0;
+    const max_turns = parseInt(maxTurnsInput.value) || 9999;
+
+    const found = conversationsList.find(c => c.id === conv_id);
+    const title = found ? found.preview : `会话·${conv_id.slice(0, 8)}`;
+
+    try {
+      addSessionToFleetBtn.disabled = true;
+      const res = await safeFetch('/api/sessions/add', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          conv_id,
+          node_type,
+          title,
+          prompt,
+          cooldown,
+          max_turns,
+          enabled: true
+        })
+      });
+      const data = await res.json();
+      if (data.ok) {
+        showToast(`已成功纳管会话 [${title.slice(0, 12)}...] 并开启巡航！`, '🚀');
+        playChime(659.2);
+        fetchStatus();
+        fetchLogs();
+        if (fleetSection) {
+          fleetSection.scrollIntoView({ behavior: 'smooth' });
+        }
+      } else {
+        showToast('添加失败', '⚠️');
+      }
+    } catch (e) {
+      showToast('请求异常: ' + e.message, '✖');
+    } finally {
+      addSessionToFleetBtn.disabled = false;
+    }
+  });
 }
 
 // 5. 节点切换
@@ -2145,7 +1745,7 @@ function selectNode(nodeType) {
   }).then(async () => {
     appState.node_type = nodeType;
     if (currentNodeBadge) {
-      currentNodeBadge.innerText = nodeType.startsWith('ssh:') ? `☁️ 远程节点: ${nodeType.slice(4)}` : '🖥️ 本地环境 (Local)';
+      currentNodeBadge.innerText = nodeType.startsWith('ssh:') ? '☁️ 远程节点: 恒源云西区' : '🖥️ 本地环境 (Local)';
     }
     if (nodeType === 'local') {
       nodeBtnLocal.classList.add('active');
@@ -2155,19 +1755,20 @@ function selectNode(nodeType) {
       nodeBtnWestc.classList.add('active');
     }
     showToast(`视图已切换至: ${nodeType}`, '🌐');
-    fetchConversations(true);
+    fetchConversations();
   });
 }
 
 if (nodeBtnLocal) nodeBtnLocal.addEventListener('click', () => selectNode('local'));
 if (nodeBtnWestc) nodeBtnWestc.addEventListener('click', () => selectNode('ssh:seetacloud-westc'));
 
-if (saveCustomPromptBtn) {
-  saveCustomPromptBtn.addEventListener('click', () => saveCustomMacro(promptInput ? promptInput.value : ''));
-}
-if (saveEditPromptMacroBtn) {
-  saveEditPromptMacroBtn.addEventListener('click', () => saveCustomMacro(editSessionPrompt ? editSessionPrompt.value : ''));
-}
+// 快捷药丸
+document.querySelectorAll('.prompt-pill').forEach(pill => {
+  pill.addEventListener('click', () => {
+    promptInput.value = pill.dataset.val;
+    showToast(`已选用提示词: "${pill.dataset.val}"`, '💬');
+  });
+});
 
 if (convSelect) {
   convSelect.addEventListener('change', updateSelectedConvPreview);
@@ -2180,32 +1781,14 @@ if (convSearchInput) {
 if (refreshConvsBtn) {
   refreshConvsBtn.addEventListener('click', async () => {
     refreshConvsBtn.innerText = '⏳ 扫描中...';
-    await fetchConversations(true);
+    await fetchConversations();
     refreshConvsBtn.innerText = '🔄 刷新会话列表';
     showToast('会话列表已刷新', '🔄');
   });
 }
 
-if (refreshRadarBtn) {
-  refreshRadarBtn.addEventListener('click', async () => {
-    refreshRadarBtn.innerText = '⏳ 扫描中...';
-    await fetchConversations(true);
-    refreshRadarBtn.innerText = '🔄 立即扫描';
-    showToast('Antigravity 会话雷达已刷新', '📡');
-  });
-}
-
 if (hideEmptyCheckbox) {
-  hideEmptyCheckbox.addEventListener('change', () => {
-    renderConversationsDropdown();
-    renderRadarList();
-  });
-}
-if (hideSubagentsCheckbox) {
-  hideSubagentsCheckbox.addEventListener('change', () => {
-    renderConversationsDropdown();
-    renderRadarList();
-  });
+  hideEmptyCheckbox.addEventListener('change', renderConversationsDropdown);
 }
 
 // 顶部重启服务
@@ -2245,20 +1828,10 @@ if (copyLogsBtn) {
 }
 
 if (quickTestLspBtn) {
-  quickTestLspBtn.addEventListener('click', async () => {
-    showToast('正在主动探测 Antigravity Language Server 与索引数据库...', '🔍');
-    try {
-      const res = await safeFetch('/api/lsp/probe', {}, 6000);
-      const data = await res.json();
-      if (data.ok) {
-        showToast(`LSP 握手正常 (${data.addr} · ${data.latency_ms}ms) · 索引DB: ${data.db_exists ? '就绪' : '无'}`, '✅');
-      } else {
-        showToast(`LSP 探测异常: ${data.error || '未发现活跃服务'}`, '⚠️');
-      }
-      fetchStatus();
-    } catch (e) {
-      showToast('LSP 探测请求失败: ' + e.message, '✖');
-    }
+  quickTestLspBtn.addEventListener('click', () => {
+    fetchStatus().then(() => {
+      showToast(appState.lsp_ok ? 'LSP 通道处于就绪可用状态' : '未检测到 LSP 接口', appState.lsp_ok ? '✅' : '⚠️');
+    });
   });
 }
 
@@ -2552,8 +2125,6 @@ async function initApp() {
   initNotifications();
   initStrategyModal();
   initReportModal();
-  initSessionEditModal();
-  renderMacroBars();
   await fetchStatus();
   await fetchConversations();
   await fetchLogs();
@@ -2575,15 +2146,10 @@ async function initApp() {
     }
   }, 3000);
 
-  // 4 秒自动刷新一次会话实时雷达列表，15 秒刷新一次 Webhook 状态
+  // 15 秒更新一次会话扫描缓存与 Webhook 状态
   setInterval(() => {
     if (isPollingActive) {
       fetchConversations();
-    }
-  }, 4000);
-
-  setInterval(() => {
-    if (isPollingActive) {
       updateWebhookBadge();
     }
   }, 15000);

@@ -17,9 +17,8 @@ if sys.platform == "win32":
     except Exception:
         pass
 
-from ls_discovery import resolve_brain_dir, load_conversation_summaries, probe_ls_connection
-
-BRAIN_DIR = resolve_brain_dir()
+USER_HOME = os.path.expanduser("~")
+BRAIN_DIR = os.path.join(USER_HOME, ".gemini", "antigravity-ide", "brain")
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
 API_STATUS_URL = "http://127.0.0.1:5300/api/status"
 
@@ -118,30 +117,25 @@ def main():
 
         sessions = live_status.get("sessions", [])
         if sessions:
-            print(f"{'工作区/节点':<18} {'会话ID':<13} {'状态':<18} {'步数与速率':<16} {'已注入':<8} {'提示词与异常'}")
-            print("-" * 88)
+            print(f"{'节点':<8} {'会话ID':<14} {'状态':<14} {'步数与速率':<15} {'已注入':<8} {'提示词与标签'}")
+            print("-" * 76)
             for s in sessions:
-                raw_node = s.get("node_type", "local")
-                ws = s.get("workspace") or ("本地" if raw_node == "local" else raw_node[4:])
-                node_short = ws[-16:] if len(ws) > 16 else ws
-                pin_mark = "📌" if s.get("pinned") else ""
+                node_short = "本地" if s.get("node_type") == "local" else "恒源云"
+                pin_mark = "📌 " if s.get("pinned") else ""
                 cid_short = pin_mark + s.get("id", "")[:8] + ".."
                 state = s.get("state", "UNKNOWN")
-                live_st = s.get("live_state", "")
                 dur = s.get("busy_duration", 0)
-                dur_str = f"({dur}s)" if dur > 0 and (state == "BUSY" or live_st == "BUSY") else ""
-                disp_state = f"MON/{live_st}" if (not s.get("enabled") and live_st) else state
-                state_str = f"{disp_state} {dur_str}".strip()
+                dur_str = f"({dur}s)" if dur > 0 and state == "BUSY" else ""
+                state_str = f"{state} {dur_str}".strip()
                 vel = s.get("step_velocity", 0.0)
                 vel_str = f" (+{vel}/m)" if vel > 0 else ""
                 step = f"Step {s.get('current_step', '--')}{vel_str}"
                 sent = f"{s.get('sent_count', 0)} 轮"
                 tags = s.get("tags", [])
                 tag_str = f" [#{','.join(tags)}]" if tags else ""
-                err = s.get("error", "")
-                extra = f"ERR: {err[:22]}" if err else f"\"{(s.get('prompt', '继续')[:14] + tag_str)}\""
-                enabled_mark = "🟢" if s.get("enabled") else "👁️"
-                print(f"{node_short:<18} {cid_short:<13} {enabled_mark} {state_str:<16} {step:<16} {sent:<8} {extra}")
+                prompt = (s.get("prompt", "继续")[:14] + tag_str)
+                enabled_mark = "🟢" if s.get("enabled") else "⏸️"
+                print(f"{node_short:<8} {cid_short:<14} {enabled_mark} {state_str:<12} {step:<15} {sent:<8} \"{prompt}\"")
         else:
             print("  ⚪ 暂无纳管会话记录")
 
@@ -162,18 +156,6 @@ def main():
             except Exception as e:
                 print(f"[!] 读取配置异常: {e}")
 
-    # Language Server 与 Antigravity 会话总览
-    probe = probe_ls_connection(force_refresh=True)
-    ls_state = f"🟢 在线 ({probe.get('addr')} · {probe.get('latency_ms')}ms)" if probe.get("ok") else f"🔴 未连接 ({probe.get('error')})"
-    print(f"\n[ Antigravity LSP 通道诊断 ]")
-    print(f"  • 接口状态     : {ls_state}")
-    print(f"  • 会话目录     : {BRAIN_DIR}")
-    summaries = load_conversation_summaries()
-    if summaries:
-        main_convs = [v for v in summaries.values() if not v.get("is_subagent")]
-        sub_cnt = len(summaries) - len(main_convs)
-        print(f"  • 本地会话总数 : {len(main_convs)} 个主会话 (另有 {sub_cnt} 个子代理会话)")
-
     # 活跃进程与端口提示
     print("\n[ 活跃系统进程检测 ]")
     procs = check_active_processes()
@@ -185,6 +167,7 @@ def main():
 
     print("\n[ 常用快捷链接 ]")
     print("  • Web 控制中心 : http://localhost:5300/")
+    print("  • 微光账单预览 : http://localhost:8092/preview.html?v=v58systems")
     print("=" * 72)
 
 

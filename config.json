@@ -2,18 +2,57 @@
   "node_type": "local",
   "monitored_sessions": [
     {
-      "id": "9da8a11f-ad4e-493c-9081-65c42e4265de",
+      "id": "9b984826-9361-4145-85fb-75cd741ee997",
       "node_type": "local",
-      "title": "帮我规划一下e盘的文件配置我要作为我的3d圆柱数据存储地方",
+      "title": "/goal 继续无止境开发",
       "prompt": "[/goal](slashCommand;goal) 继续全局开发",
       "cooldown": 3.0,
       "max_turns": 9999,
       "enabled": false,
-      "pinned": false,
-      "tags": []
+      "pinned": false
+    },
+    {
+      "id": "b3636e97-3c55-494b-82c5-6b9b1accf5fe",
+      "node_type": "local",
+      "title": "Antigravity Auto-Pilot Multi-Session",
+      "prompt": "[/goal](slashCommand;goal) 继续全局开发",
+      "cooldown": 3.0,
+      "max_turns": 9999,
+      "enabled": false,
+      "pinned": false
+    },
+    {
+      "id": "d8b02da2-566d-47f4-9134-ba862677c798",
+      "node_type": "ssh:seetacloud-westc",
+      "title": "我的seagent下一步如何设计才能更符合定位",
+      "prompt": "[/goal](slashCommand;goal) 继续全局开发",
+      "cooldown": 3.0,
+      "max_turns": 9999,
+      "enabled": true,
+      "pinned": true
+    },
+    {
+      "id": "dcd67e14-92ae-4864-866e-c35abc6e66f1",
+      "node_type": "local",
+      "title": "/goal 继续全局开发",
+      "prompt": "[/goal](slashCommand;goal) 继续全局开发",
+      "cooldown": 3.0,
+      "max_turns": 9999,
+      "enabled": false,
+      "pinned": false
+    },
+    {
+      "id": "43f528b5-c7b4-40ff-ba58-f7f0835d0808",
+      "node_type": "local",
+      "title": "我现在要建立一个三维的场景，我是应该branch还是在main上继续",
+      "prompt": "[/goal](slashCommand;goal) 继续全局开发",
+      "cooldown": 3.0,
+      "max_turns": 9999,
+      "enabled": true,
+      "pinned": false
     }
   ],
-  "target_conversation_id": "9da8a11f-ad4e-493c-9081-65c42e4265de",
+  "target_conversation_id": "9b984826-9361-4145-85fb-75cd741ee997",
   "continue_prompt": "[/goal](slashCommand;goal) 继续全局开发",
   "idle_delay_seconds": 3.0,
   "max_turns": 9999,

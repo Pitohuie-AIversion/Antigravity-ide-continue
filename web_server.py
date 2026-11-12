@@ -32,26 +32,115 @@ if sys.platform == "win32":
     except Exception:
         pass
 
-from ls_discovery import (
-    USER_HOME,
-    LOCAL_APP_DATA,
-    resolve_brain_dir,
-    resolve_ls_exe,
-    resolve_agentapi_bat,
-    resolve_summaries_db,
-    get_active_ls_env,
-    build_clean_agentapi_env,
-    sanitize_agent_env,
-    load_conversation_summaries,
-    get_conversation_summary,
-    probe_ls_connection,
-)
-
 PORT = 5300
-BRAIN_DIR = resolve_brain_dir()
-LS_EXE = resolve_ls_exe()
-AGENTAPI_BAT = resolve_agentapi_bat()
-SUMMARIES_DB = resolve_summaries_db()
+USER_HOME = os.path.expanduser("~")
+BRAIN_DIR = os.path.join(USER_HOME, ".gemini", "antigravity-ide", "brain")
+LOCAL_APP_DATA = os.environ.get("LOCALAPPDATA", os.path.join(USER_HOME, "AppData", "Local"))
+LS_EXE = os.path.join(
+    LOCAL_APP_DATA, "Programs", "Antigravity IDE", "resources", "app",
+    "extensions", "antigravity", "bin", "language_server_windows_x64.exe"
+)
+AGENTAPI_BAT = os.path.join(USER_HOME, ".gemini", "antigravity-ide", "bin", "agentapi.bat")
+
+_cached_ls_env = {"addr": None, "token": None, "time": 0.0}
+
+def get_active_ls_env(force_refresh: bool = False) -> Tuple[Optional[str], Optional[str]]:
+    """Dynamically discover the active Antigravity Language Server port and CSRF token on Windows.
+    This guarantees seamless injection even when user switches Google accounts or restarts the IDE.
+    """
+    global _cached_ls_env
+    now = time.time()
+    if not force_refresh and _cached_ls_env["addr"] and (now - _cached_ls_env["time"] < 60.0):
+        return _cached_ls_env["addr"], _cached_ls_env["token"]
+
+    if sys.platform != "win32":
+        return None, None
+
+    try:
+        startupinfo = None
+        if os.name == 'nt':
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+
+        # 1. Parse listening ports in 20ms using native Windows netstat
+        ports_by_pid = {}
+        try:
+            res_netstat = subprocess.run(
+                ['netstat', '-ano', '-p', 'tcp'],
+                capture_output=True, text=True, startupinfo=startupinfo, timeout=2.0
+            )
+            for line in res_netstat.stdout.splitlines():
+                if 'LISTENING' in line:
+                    parts = line.strip().split()
+                    if len(parts) >= 5:
+                        local_addr, pid_str = parts[1], parts[4]
+                        if ':' in local_addr and pid_str.isdigit():
+                            port = int(local_addr.rsplit(':', 1)[1])
+                            pid = int(pid_str)
+                            ports_by_pid.setdefault(pid, []).append(port)
+        except Exception:
+            pass
+
+        # 2. Query running language_server processes
+        ps_cmd = 'Get-CimInstance Win32_Process -Filter "Name LIKE \'%language_server_windows_x64%\'" | Select-Object ProcessId, CommandLine | ConvertTo-Json'
+        res = subprocess.run(
+            ['powershell', '-NoProfile', '-Command', ps_cmd],
+            capture_output=True, text=True, encoding='utf-8', errors='replace',
+            startupinfo=startupinfo, timeout=4.0
+        )
+        if not res.stdout.strip():
+            return None, None
+        procs = json.loads(res.stdout)
+        if isinstance(procs, dict):
+            procs = [procs]
+
+        # Prioritize main extension server (subclient_type ide, without --enable_lsp)
+        procs_sorted = sorted(procs, key=lambda p: 0 if ('--enable_lsp' not in (p.get('CommandLine') or '')) else 1)
+
+        probe_bin = LS_EXE if os.path.exists(LS_EXE) else AGENTAPI_BAT
+        for p in procs_sorted:
+            pid = p.get('ProcessId')
+            cmdline = p.get('CommandLine') or ''
+            token_m = re.search(r'--csrf_token\s+([a-f0-9\-]+)', cmdline)
+            token = token_m.group(1) if token_m else ''
+            ports = ports_by_pid.get(pid, [])
+            for port in ports:
+                probe_env = os.environ.copy()
+                probe_env['ANTIGRAVITY_LS_ADDRESS'] = f'127.0.0.1:{port}'
+                if token:
+                    probe_env['ANTIGRAVITY_CSRF_TOKEN'] = token
+                test_res = subprocess.run(
+                    [probe_bin, 'agentapi', 'get-conversation-metadata', 'test_probe'] if probe_bin == LS_EXE else [probe_bin, 'get-conversation-metadata', 'test_probe'],
+                    capture_output=True, text=True, encoding='utf-8', errors='replace',
+                    env=probe_env, startupinfo=startupinfo, timeout=2.0
+                )
+                # Successful response or valid RPC trajectory error indicates active language server
+                out = test_res.stdout or ""
+                if test_res.returncode == 0 or "trajectory not found" in out or "conversationMetadata" in out:
+                    addr = f'127.0.0.1:{port}'
+                    _cached_ls_env["addr"] = addr
+                    _cached_ls_env["token"] = token
+                    _cached_ls_env["time"] = now
+                    return addr, token
+
+
+        # Fallback to first available candidate
+        for p in procs_sorted:
+            pid = p.get('ProcessId')
+            cmdline = p.get('CommandLine') or ''
+            token_m = re.search(r'--csrf_token\s+([a-f0-9\-]+)', cmdline)
+            token = token_m.group(1) if token_m else ''
+            ports = ports_by_pid.get(pid, [])
+            if ports and token:
+                addr = f'127.0.0.1:{ports[0]}'
+                _cached_ls_env["addr"] = addr
+                _cached_ls_env["token"] = token
+                _cached_ls_env["time"] = now
+                return addr, token
+    except Exception:
+        pass
+
+    return None, None
 
 if getattr(sys, 'frozen', False):
     APP_DIR = os.path.dirname(sys.executable)
@@ -138,14 +227,8 @@ class MultiSessionDaemon:
         self.telemetry_history = deque(maxlen=60)
         self._last_telemetry_snapshot = 0.0
         self.step_history: Dict[str, deque] = {}  # conv_id -> deque of (timestamp, step_idx)
-        self._step_count_cache: Dict[str, Tuple[float, int, int]] = {}  # path -> (mtime, size, count)
-        self._preview_cache: Dict[str, Tuple[float, int, str]] = {}     # path -> (mtime, size, first_user_input)
-        self._tail_scan_cache: Dict[str, Tuple[float, int, bool, bool]] = {}  # path -> (mtime, size, waiting_decision, is_completed)
-        self._shutting_down = False
         self.notification_callback: Optional[Any] = None
         self._last_config_mtime = 0.0
-        self.continue_prompt = "继续"
-        self.idle_delay_seconds = 3.0
 
         # Load initial config and registered sessions
         self.load_config()
@@ -177,16 +260,9 @@ class MultiSessionDaemon:
                 time.sleep(30)
                 try:
                     with self.lock:
-                        hosts = {
-                            s.get("node_type", "").split("ssh:", 1)[1]
-                            for s in self.sessions.values()
-                            if s.get("node_type", "").startswith("ssh:")
-                        }
-                        if self.node_type.startswith("ssh:"):
-                            hosts.add(self.node_type.split("ssh:", 1)[1])
-                    for h in hosts:
-                        if h:
-                            run_ssh(h, "true", timeout=4.0)
+                        has_ssh = any(s.get("node_type", "").startswith("ssh:") for s in self.sessions.values()) or self.node_type.startswith("ssh:")
+                    if has_ssh:
+                        run_ssh("seetacloud-westc", "true", timeout=4.0)
                 except Exception:
                     pass
         t = threading.Thread(target=keepalive_worker, daemon=True)
@@ -204,8 +280,6 @@ class MultiSessionDaemon:
                     cfg = json.load(f)
                     with self.lock:
                         self.node_type = cfg.get("node_type", self.node_type)
-                        self.continue_prompt = cfg.get("continue_prompt", self.continue_prompt)
-                        self.idle_delay_seconds = float(cfg.get("idle_delay_seconds", self.idle_delay_seconds))
                         
                         self.webhook = cfg.get("webhook", self.webhook)
                         cfg_strat = cfg.get("strategy", {})
@@ -248,11 +322,10 @@ class MultiSessionDaemon:
                                     cur["enabled"] = new_enabled
                                     cur["state"] = "IDLE" if new_enabled else "STOPPED"
                             else:
-                                meta = get_conversation_summary(cid) if not str(s.get("node_type", "local")).startswith("ssh:") else None
                                 self.sessions[cid] = {
                                     "id": cid,
                                     "node_type": s.get("node_type", "local"),
-                                    "title": s.get("title") or (meta.get("title") if meta else "") or cid[:12],
+                                    "title": s.get("title", cid[:12]),
                                     "prompt": s.get("prompt", "继续"),
                                     "cooldown": float(s.get("cooldown", 3.0)),
                                     "max_turns": int(s.get("max_turns", 9999)),
@@ -260,23 +333,12 @@ class MultiSessionDaemon:
                                     "pinned": bool(s.get("pinned", False)),
                                     "tags": s.get("tags", []),
                                     "state": "IDLE" if s.get("enabled", True) else "STOPPED",
-                                    "live_state": "UNKNOWN",
-                                    "workspace": (meta.get("workspace", "") if meta else ""),
-                                    "db_status": (meta.get("status", "") if meta else ""),
-                                    "not_fully_idle": bool(meta.get("not_fully_idle", False)) if meta else False,
-                                    "waiting_decision": False,
-                                    "is_triggering": False,
-                                    "fail_count": 0,
-                                    "next_retry_at": 0.0,
-                                    "last_error_step": -1,
                                     "current_step": 0,
                                     "last_handled_step": -1,
                                     "sent_count": 0,
                                     "step_velocity": 0.0,
                                     "cooldown_remaining": 0.0,
                                     "idle_start_time": None,
-                                    "busy_start_time": None,
-                                    "busy_duration": 0,
                                     "last_snippet": "",
                                     "error": "",
                                     "updated_at": time.time()
@@ -286,20 +348,19 @@ class MultiSessionDaemon:
             except Exception as e:
                 self.add_log(f"加载 config.json 失败: {e}", "WARN")
 
-        # If still empty, scan local and register latest primary session in monitor-only (paused) mode
+        # If still empty, scan local and register latest session as default
         if not self.sessions:
-            convs = self.scan_conversations(node="local", limit=10, force=True)
-            primary = next((c for c in convs if not c.get("is_subagent") and not c.get("is_empty")), None) or (convs[0] if convs else None)
-            if primary:
-                c = primary
+            convs = self.scan_conversations(node="local", limit=1, force=True)
+            if convs:
+                c = convs[0]
                 self.add_session(
                     conv_id=c["id"],
                     node_type="local",
-                    title=(c.get("title") or c.get("preview") or c["id"][:12])[:40],
-                    prompt=self.continue_prompt or "继续",
-                    cooldown=max(1.0, float(self.idle_delay_seconds)),
+                    title=c["preview"][:30],
+                    prompt="继续",
+                    cooldown=3.0,
                     max_turns=9999,
-                    enabled=False,
+                    enabled=True,
                     tags=[]
                 )
 
@@ -473,29 +534,18 @@ class MultiSessionDaemon:
         if not conv_id:
             return False
 
-        meta = get_conversation_summary(conv_id) if not node_type.startswith("ssh:") else None
-        workspace = meta.get("workspace", "") if meta else ""
-        db_status = meta.get("status", "") if meta else ""
-        not_fully_idle = bool(meta.get("not_fully_idle", False)) if meta else False
-
-        with self.lock:
-            cached = self.cached_convs.get(node_type, [])
-        found = next((c for c in cached if c["id"] == conv_id), None)
-        if found:
-            workspace = workspace or found.get("workspace", "")
-            db_status = db_status or found.get("db_status", "")
-
         if not title:
-            if meta and (meta.get("title") or meta.get("preview")):
-                title = (meta.get("title") or meta.get("preview") or "")[:40]
-            elif found:
-                title = (found.get("title") or found.get("preview") or "")[:40]
+            # Try to resolve title from cached conversations
+            with self.lock:
+                cached = self.cached_convs.get(node_type, [])
+            found = next((c for c in cached if c["id"] == conv_id), None)
+            if found:
+                title = found.get("preview", "")[:40]
             else:
                 title = f"{node_type[:5]}·{conv_id[:8]}"
 
         with self.lock:
             is_new = conv_id not in self.sessions
-            existing = self.sessions.get(conv_id, {})
             self.sessions[conv_id] = {
                 "id": conv_id,
                 "node_type": node_type,
@@ -505,33 +555,21 @@ class MultiSessionDaemon:
                 "max_turns": int(max_turns),
                 "enabled": enabled,
                 "state": "IDLE" if enabled else "STOPPED",
-                "live_state": existing.get("live_state", "UNKNOWN"),
-                "workspace": workspace or existing.get("workspace", ""),
-                "db_status": db_status or existing.get("db_status", ""),
-                "not_fully_idle": not_fully_idle,
-                "waiting_decision": existing.get("waiting_decision", False),
-                "is_triggering": False,
-                "fail_count": 0,
-                "next_retry_at": 0.0,
-                "last_error_step": -1,
-                "current_step": existing.get("current_step", 0),
-                "last_handled_step": existing.get("last_handled_step", -1),
-                "sent_count": existing.get("sent_count", 0),
-                "step_velocity": existing.get("step_velocity", 0.0),
+                "current_step": 0,
+                "last_handled_step": -1,
+                "sent_count": 0,
+                "step_velocity": 0.0,
                 "cooldown_remaining": 0.0,
                 "idle_start_time": None,
-                "busy_start_time": existing.get("busy_start_time"),
-                "busy_duration": existing.get("busy_duration", 0),
-                "last_snippet": existing.get("last_snippet", ""),
+                "last_snippet": "",
                 "error": "",
-                "pinned": bool(existing.get("pinned", False)),
-                "tags": tags if tags is not None else existing.get("tags", []),
+                "pinned": False,
+                "tags": tags or [],
                 "updated_at": time.time()
             }
 
         self.save_config()
-        mode_desc = "自驱巡航" if enabled else "仅实时监控"
-        action_desc = f"新增并纳管({mode_desc})" if is_new else f"更新配置({mode_desc})"
+        action_desc = "新增并纳管" if is_new else "更新配置"
         self.add_log(f"{action_desc}会话 [{title}] (节点: {node_type})", "SUCCESS")
         return True
 
@@ -557,15 +595,10 @@ class MultiSessionDaemon:
             s["state"] = "IDLE" if new_val else "STOPPED"
             s["cooldown_remaining"] = 0.0
             s["idle_start_time"] = None
-            if new_val:
-                s["error"] = ""
-                s["fail_count"] = 0
-                s["next_retry_at"] = 0.0
-                s["last_error_step"] = -1
             title = s.get("title", conv_id[:8])
 
         self.save_config()
-        status_txt = "开启自驱" if new_val else "切换为仅监控(暂停自动注入)"
+        status_txt = "开启自驱" if new_val else "暂停自驱"
         self.add_log(f"会话 [{title}] {status_txt}", "SUCCESS" if new_val else "INFO")
         return True
 
@@ -597,12 +630,8 @@ class MultiSessionDaemon:
             self.is_running = True
             for s in self.sessions.values():
                 s["enabled"] = True
-                if s["state"] in ("STOPPED", "ERROR"):
+                if s["state"] == "STOPPED":
                     s["state"] = "IDLE"
-                s["error"] = ""
-                s["fail_count"] = 0
-                s["next_retry_at"] = 0.0
-                s["last_error_step"] = -1
         self.save_config()
         self.add_log("🚀 已一键启动全矩阵自驱巡航！", "SUCCESS")
 
@@ -614,12 +643,7 @@ class MultiSessionDaemon:
                 s["cooldown_remaining"] = 0.0
                 s["idle_start_time"] = None
         self.save_config()
-        self.add_log("⏹ 已全部暂停自动注入（本地会话保持实时监控）。", "INFO")
-
-    def shutdown(self):
-        """Stop worker loop cleanly during process restart/exit without altering persisted config.json."""
-        with self.lock:
-            self._shutting_down = True
+        self.add_log("⏹ 已全部暂停自驱巡航守护。", "INFO")
 
     def batch_toggle(self, conv_ids: List[str], enabled: bool) -> int:
         count = 0
@@ -630,11 +654,6 @@ class MultiSessionDaemon:
                     self.sessions[cid]["state"] = "IDLE" if enabled else "STOPPED"
                     self.sessions[cid]["cooldown_remaining"] = 0.0
                     self.sessions[cid]["idle_start_time"] = None
-                    if enabled:
-                        self.sessions[cid]["error"] = ""
-                        self.sessions[cid]["fail_count"] = 0
-                        self.sessions[cid]["next_retry_at"] = 0.0
-                        self.sessions[cid]["last_error_step"] = -1
                     count += 1
         if count > 0:
             self.save_config()
@@ -668,36 +687,21 @@ class MultiSessionDaemon:
             self.add_log(f"批量更新了 {count} 个会话参数 (提示词/冷却)", "SUCCESS")
         return count
 
-    def trigger_session_detailed(self, conv_id: str, text: Optional[str] = None) -> Tuple[bool, str]:
+    def trigger_session(self, conv_id: str, text: Optional[str] = None) -> bool:
         with self.lock:
             s = self.sessions.get(conv_id)
             if not s:
-                return False, "会话不在监控池中"
+                return False
             node = s["node_type"]
             prompt = text or s["prompt"]
             title = s.get("title", conv_id[:8])
-            cur_step = s.get("current_step", -1)
 
         self.add_log(f"手动单次注入指令 -> \"{prompt}\"", "INFO", session_tag=title[:10])
-        ok, err_detail = self.send_message_detailed(node, conv_id, prompt)
-        with self.lock:
-            if conv_id in self.sessions:
-                curr = self.sessions[conv_id]
-                if ok:
-                    curr["sent_count"] += 1
-                    if cur_step >= 0:
-                        curr["last_handled_step"] = cur_step
-                    curr["error"] = ""
-                    curr["fail_count"] = 0
-                    curr["next_retry_at"] = 0.0
-                    curr["last_error_step"] = -1
-                    self.injection_timestamps.append(time.time())
-                else:
-                    curr["error"] = err_detail or "注入失败"
-        return ok, err_detail
-
-    def trigger_session(self, conv_id: str, text: Optional[str] = None) -> bool:
-        ok, _ = self.trigger_session_detailed(conv_id, text)
+        ok = self.send_message(node, conv_id, prompt)
+        if ok:
+            with self.lock:
+                if conv_id in self.sessions:
+                    self.sessions[conv_id]["sent_count"] += 1
         return ok
 
     def set_node(self, node_type: str):
@@ -710,18 +714,10 @@ class MultiSessionDaemon:
         with self.lock:
             cached = list(self.cached_convs.get(node, []))
             last_t = self.last_convs_time.get(node, 0.0)
-            monitored_map = {k: bool(v.get("enabled")) for k, v in self.sessions.items()}
 
         now = time.time()
-        if not force and (now - last_t < 2.0) and cached:
-            out_list = []
-            for item in cached:
-                copy_item = dict(item)
-                cid = copy_item.get("id", "")
-                copy_item["is_monitored"] = cid in monitored_map
-                copy_item["monitored_enabled"] = monitored_map.get(cid)
-                out_list.append(copy_item)
-            return out_list
+        if not force and (now - last_t < 15.0) and cached:
+            return cached
 
         # 1. 远程 SSH 扫描
         if node.startswith("ssh:"):
@@ -733,10 +729,6 @@ class MultiSessionDaemon:
                         line = line.strip()
                         if line.startswith("[") and line.endswith("]"):
                             data = json.loads(line)
-                            for item in data:
-                                cid = item.get("id", "")
-                                item["is_monitored"] = cid in monitored_map
-                                item["monitored_enabled"] = monitored_map.get(cid)
                             with self.lock:
                                 self.cached_convs[node] = data
                                 self.last_convs_time[node] = now
@@ -745,11 +737,10 @@ class MultiSessionDaemon:
                 self.add_log(f"远程节点 [{host}] 扫描会话失败: {e}", "WARN")
             return cached or []
 
-        # 2. 本地扫描（结合 transcript.jsonl 与 Antigravity 2.0 conversation_summaries.db）
+        # 2. 本地扫描
         if not os.path.exists(BRAIN_DIR):
             return []
 
-        summaries = load_conversation_summaries()
         convs = []
         try:
             for entry in os.listdir(BRAIN_DIR):
@@ -757,71 +748,15 @@ class MultiSessionDaemon:
                 if os.path.exists(p):
                     mtime = os.path.getmtime(p)
                     step_count = self._count_steps(p)
-                    meta = summaries.get(entry, {})
-                    if step_count == 0 and meta.get("step_count", 0) > 0:
-                        step_count = int(meta.get("step_count", 0))
                     is_empty = (step_count == 0)
-                    is_subagent = bool(meta.get("is_subagent"))
-                    agent_name = meta.get("agent_name", "")
-                    parent_id = meta.get("parent_conversation_id", "")
-                    db_title = (meta.get("title") or "").strip()
-                    db_preview = (meta.get("preview") or "").strip()
-                    workspace = meta.get("workspace", "")
-                    db_status = meta.get("status", "")
-                    not_fully_idle = bool(meta.get("not_fully_idle", False))
-                    killed = bool(meta.get("killed", False))
-
-                    first_user = "" if is_empty else self._extract_first_user_input(p)
-                    if db_title:
-                        display_title = db_title
-                    elif db_preview:
-                        display_title = db_preview
-                    elif first_user:
-                        display_title = first_user
-                    elif is_subagent:
-                        display_title = f"🤖 子代理 ({agent_name or 'subagent'})"
-                    elif not is_empty:
-                        display_title = f"会话·{entry[:8]}"
-                    else:
-                        display_title = "🌱 (新建空白会话 · 尚未发消息)"
-
-                    preview = first_user or db_preview or db_title or display_title
-                    waiting_decision = False
-                    is_completed = False
-                    if not is_empty:
-                        waiting_decision, is_completed = self._quick_tail_flags(p)
-
-                    if waiting_decision:
-                        live_state = "WAITING_DECISION"
-                    elif db_status in ("CASCADE_RUN_STATUS_RUNNING", "CASCADE_RUN_STATUS_BUSY", "CASCADE_RUN_STATUS_CANCELING") or not_fully_idle:
-                        live_state = "BUSY"
-                    elif is_empty:
-                        live_state = "EMPTY"
-                    elif is_completed:
-                        live_state = "COMPLETED"
-                    else:
-                        live_state = "IDLE"
-
+                    preview = self._extract_preview(p, is_empty)
                     convs.append({
                         "id": entry,
                         "mtime": mtime,
                         "mtime_str": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(mtime)),
-                        "title": display_title,
                         "preview": preview,
-                        "workspace": workspace,
                         "step_count": step_count,
                         "is_empty": is_empty,
-                        "is_subagent": is_subagent,
-                        "agent_name": agent_name,
-                        "parent_conversation_id": parent_id,
-                        "nesting_depth": int(meta.get("nesting_depth") or 0),
-                        "db_status": db_status,
-                        "not_fully_idle": not_fully_idle,
-                        "killed": killed,
-                        "live_state": live_state,
-                        "project_id": meta.get("project_id", ""),
-                        "is_monitored": entry in monitored_map,
-                        "monitored_enabled": monitored_map.get(entry),
                         "is_remote": False
                     })
         except Exception:
@@ -834,158 +769,34 @@ class MultiSessionDaemon:
             self.last_convs_time[node] = now
         return res_list
 
-    def _quick_tail_flags(self, transcript_file: str) -> Tuple[bool, bool]:
-        """Cached O(tail) check for ask_question waiting or completion keywords."""
+    def _extract_preview(self, transcript_file: str, is_empty: bool = False) -> str:
+        if is_empty:
+            return "🌱 (新建空白会话 · 尚未发消息)"
         try:
-            st = os.stat(transcript_file)
-            cached = self._tail_scan_cache.get(transcript_file)
-            if cached and cached[0] == st.st_mtime and cached[1] == st.st_size:
-                return cached[2], cached[3]
-            tail = self._read_transcript_tail(transcript_file, tail_lines=3)
-            if not tail:
-                self._tail_scan_cache[transcript_file] = (st.st_mtime, st.st_size, False, False)
-                return False, False
-            last_step = tail[-1]
-            prev_step = tail[-2] if len(tail) >= 2 else {}
-            step_type = last_step.get("type", "")
-            status = last_step.get("status", "")
-            tool_calls = last_step.get("tool_calls") or []
-            has_q = lambda calls: any(
-                isinstance(t, dict) and "ask_question" in str(t.get("name") or t.get("tool") or "")
-                for t in (calls or [])
-            )
-            waiting = has_q(tool_calls) or (
-                step_type == "GENERIC"
-                and status in ("RUNNING", "WAITING", "PENDING")
-                and has_q(prev_step.get("tool_calls") or [])
-            )
-            content_lower = str(last_step.get("content", "")).lower()
-            completed = (
-                not waiting
-                and step_type == "PLANNER_RESPONSE"
-                and status == "DONE"
-                and len(tool_calls) == 0
-                and any(k.lower() in content_lower for k in COMPLETION_KEYWORDS)
-            )
-            self._tail_scan_cache[transcript_file] = (st.st_mtime, st.st_size, waiting, completed)
-            return waiting, completed
-        except Exception:
-            return False, False
-
-    def _extract_first_user_input(self, transcript_file: str) -> str:
-        try:
-            st = os.stat(transcript_file)
-            cached = self._preview_cache.get(transcript_file)
-            if cached and cached[0] == st.st_mtime and cached[1] == st.st_size:
-                return cached[2]
-            found = ""
             with open(transcript_file, "r", encoding="utf-8", errors="ignore") as f:
-                for idx, line in enumerate(f):
-                    if idx > 40:
-                        break
+                for line in f:
                     line = line.strip()
                     if not line:
                         continue
-                    try:
-                        item = json.loads(line)
-                    except Exception:
-                        continue
+                    item = json.loads(line)
                     if item.get("type") == "USER_INPUT" and item.get("content"):
                         content = str(item.get("content")).strip()
                         if "<USER_REQUEST>" in content:
                             content = content.split("<USER_REQUEST>")[1].split("</USER_REQUEST>")[0].strip()
                         content = content.replace("\n", " ")
-                        found = (content[:70] + "...") if len(content) > 70 else content
-                        break
-            self._preview_cache[transcript_file] = (st.st_mtime, st.st_size, found)
-            return found
+                        return (content[:70] + "...") if len(content) > 70 else content
         except Exception:
-            return ""
-
-    def _extract_preview(self, transcript_file: str, is_empty: bool = False) -> str:
-        if is_empty:
-            return "🌱 (新建空白会话 · 尚未发消息)"
-        first_user = self._extract_first_user_input(transcript_file)
-        return first_user if first_user else "🌱 (新建空白会话 · 尚未发消息)"
+            pass
+        return "🌱 (新建空白会话 · 尚未发消息)"
 
     def _count_steps(self, transcript_file: str) -> int:
         try:
-            st = os.stat(transcript_file)
-            cached = self._step_count_cache.get(transcript_file)
-            if cached and cached[0] == st.st_mtime and cached[1] == st.st_size:
-                return cached[2]
-            if st.st_size == 0:
-                self._step_count_cache[transcript_file] = (st.st_mtime, st.st_size, 0)
-                return 0
-            count = 0
-            last_byte = b""
-            with open(transcript_file, "rb") as f:
-                while True:
-                    chunk = f.read(65536)
-                    if not chunk:
-                        break
-                    count += chunk.count(b"\n")
-                    last_byte = chunk[-1:]
-            if st.st_size > 0 and last_byte != b"\n":
-                count += 1
-            self._step_count_cache[transcript_file] = (st.st_mtime, st.st_size, count)
-            return count
+            with open(transcript_file, "r", encoding="utf-8", errors="ignore") as f:
+                return sum(1 for line in f if line.strip())
         except Exception:
             return 0
 
-    def _read_transcript_tail(self, transcript_path: str, tail_lines: int = 8) -> List[Dict[str, Any]]:
-        """Efficiently parse the last N JSON lines from transcript.jsonl without reading huge files in full."""
-        if not os.path.exists(transcript_path):
-            return []
-        try:
-            size = os.path.getsize(transcript_path)
-            if size == 0:
-                return []
-            window = 131072
-            with open(transcript_path, "rb") as f:
-                if size <= window:
-                    raw = f.read().decode("utf-8", errors="ignore")
-                else:
-                    # Expand window if tail lines are unusually large
-                    for mult in (1, 4, 16):
-                        offset = max(0, size - window * mult)
-                        f.seek(offset)
-                        data = f.read().decode("utf-8", errors="ignore")
-                        if offset == 0 or data.count("\n") >= tail_lines + 1:
-                            raw = data.split("\n", 1)[1] if offset > 0 and "\n" in data else data
-                            break
-                    else:
-                        f.seek(0)
-                        raw = f.read().decode("utf-8", errors="ignore")
-
-            lines = [l.strip() for l in raw.splitlines() if l.strip()]
-            parsed: List[Dict[str, Any]] = []
-            for l in lines[-tail_lines:]:
-                try:
-                    parsed.append(json.loads(l))
-                except Exception:
-                    continue
-            return parsed
-        except Exception:
-            return []
-
-    @staticmethod
-    def _format_agentapi_error(raw_err: str, rc: int) -> str:
-        txt = (raw_err or "").strip()
-        if txt.startswith("{") and txt.endswith("}"):
-            try:
-                obj = json.loads(txt)
-                if obj.get("error"):
-                    txt = str(obj["error"])
-            except Exception:
-                pass
-        if "PermissionDenied" in txt or "permission_denied" in txt:
-            return f"RPC PermissionDenied (工作区/项目上下文不匹配): {txt[:160]}"
-        if "trajectory not found" in txt.lower():
-            return f"目标会话未在 Language Server 注册或已归档: {txt[:140]}"
-        return (txt[:180] if txt else f"退出码 {rc}")
-
-    def send_message_detailed(self, node: str, conv_id: str, text: str) -> Tuple[bool, str]:
+    def send_message(self, node: str, conv_id: str, text: str) -> bool:
         # 1. 远程 SSH 注入
         if node.startswith("ssh:"):
             host = node.split("ssh:")[1]
@@ -994,25 +805,24 @@ class MultiSessionDaemon:
                 res = run_ssh(host, cmd_str, timeout=12.0)
                 if res.returncode == 0:
                     self.add_log(f"远程注入成功: \"{text}\"", "TRIGGER", session_tag=f"{host}/{conv_id[:8]}")
-                    return True, ""
+                    return True
                 else:
-                    err_msg = (res.stderr.strip() or res.stdout.strip() or f"SSH Code {res.returncode}")[:180]
+                    err_msg = res.stderr.strip() or res.stdout.strip()
                     self.add_log(f"远程注入失败: {err_msg}", "ERROR", session_tag=conv_id[:8])
-                    return False, err_msg
+                    return False
             except Exception as e:
-                err_msg = str(e)
-                self.add_log(f"远程注入异常: {err_msg}", "ERROR", session_tag=conv_id[:8])
-                return False, err_msg
+                self.add_log(f"远程注入异常: {e}", "ERROR", session_tag=conv_id[:8])
+                return False
 
         # 2. 本地注入
+        cmd = []
         if os.path.exists(LS_EXE):
             cmd = [LS_EXE, "agentapi", "send-message", conv_id, text]
         elif os.path.exists(AGENTAPI_BAT):
             cmd = [AGENTAPI_BAT, "send-message", conv_id, text]
         else:
-            err_msg = "未找到 Language Server agentapi 执行接口"
-            self.add_log(err_msg, "ERROR", session_tag=conv_id[:8])
-            return False, err_msg
+            self.add_log("未找到 Language Server agentapi 执行接口", "ERROR", session_tag=conv_id[:8])
+            return False
 
         try:
             startupinfo = None
@@ -1020,8 +830,12 @@ class MultiSessionDaemon:
                 startupinfo = subprocess.STARTUPINFO()
                 startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
 
+            run_env = os.environ.copy()
             addr, token = get_active_ls_env()
-            run_env = build_clean_agentapi_env(addr=addr, token=token)
+            if addr:
+                run_env["ANTIGRAVITY_LS_ADDRESS"] = addr
+            if token:
+                run_env["ANTIGRAVITY_CSRF_TOKEN"] = token
 
             res = subprocess.run(
                 cmd,
@@ -1032,42 +846,39 @@ class MultiSessionDaemon:
                 stdin=subprocess.DEVNULL,
                 startupinfo=startupinfo,
                 env=run_env,
-                timeout=12
+                timeout=10
             )
             if res.returncode == 0:
                 self.add_log(f"本地注入成功: \"{text}\"", "TRIGGER", session_tag=f"本地/{conv_id[:8]}")
-                return True, ""
+                return True
+            else:
+                # 账户切换或服务重启时，强制刷新地址与令牌重试一次
+                addr, token = get_active_ls_env(force_refresh=True)
+                if addr:
+                    run_env["ANTIGRAVITY_LS_ADDRESS"] = addr
+                if token:
+                    run_env["ANTIGRAVITY_CSRF_TOKEN"] = token
+                retry_res = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    stdin=subprocess.DEVNULL,
+                    startupinfo=startupinfo,
+                    env=run_env,
+                    timeout=10
+                )
+                if retry_res.returncode == 0:
+                    self.add_log(f"本地注入重试成功: \"{text}\"", "TRIGGER", session_tag=f"本地/{conv_id[:8]}")
+                    return True
 
-            # 账户切换或服务重启时，强制刷新地址与令牌重试一次
-            addr, token = get_active_ls_env(force_refresh=True)
-            run_env = build_clean_agentapi_env(addr=addr, token=token)
-            retry_res = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                stdin=subprocess.DEVNULL,
-                startupinfo=startupinfo,
-                env=run_env,
-                timeout=12
-            )
-            if retry_res.returncode == 0:
-                self.add_log(f"本地注入重试成功: \"{text}\"", "TRIGGER", session_tag=f"本地/{conv_id[:8]}")
-                return True, ""
-
-            raw_err = retry_res.stderr.strip() or retry_res.stdout.strip() or res.stderr.strip() or res.stdout.strip()
-            formatted_err = self._format_agentapi_error(raw_err, retry_res.returncode)
-            self.add_log(f"本地注入失败 (Code {retry_res.returncode}): {formatted_err}", "ERROR", session_tag=conv_id[:8])
-            return False, formatted_err
+                err_detail = (retry_res.stderr.strip() or retry_res.stdout.strip() or res.stderr.strip() or res.stdout.strip())
+                self.add_log(f"本地注入失败 (Code {retry_res.returncode}): {err_detail}", "ERROR", session_tag=conv_id[:8])
+                return False
         except Exception as e:
-            err_msg = str(e)
-            self.add_log(f"本地注入进程异常: {err_msg}", "ERROR", session_tag=conv_id[:8])
-            return False, err_msg
-
-    def send_message(self, node: str, conv_id: str, text: str) -> bool:
-        ok, _ = self.send_message_detailed(node, conv_id, text)
-        return ok
+            self.add_log(f"本地注入进程异常: {e}", "ERROR", session_tag=conv_id[:8])
+            return False
 
     def generate_report(self) -> str:
         with self.lock:
@@ -1089,46 +900,27 @@ class MultiSessionDaemon:
         md.append(f"- **累计自驱动注入**: {total_sent} 轮")
         md.append(f"- **底层通道状态**: 🟢 Language Server gRPC 探活正常\n")
         md.append(f"### 📋 各会话执行明细与产出追踪")
-        md.append(f"| 节点 / 工作区 | 标题 | 会话 ID | 状态 | 当前步数 | 已注入 | 任务提示词与最新摘要 |")
+        md.append(f"| 节点 | 标题 | 会话 ID | 状态 | 当前步数 | 已注入 | 任务提示词与最新摘要 |")
         md.append(f"| :--- | :--- | :--- | :--- | :--- | :--- | :--- |")
         for s in sess_items:
-            raw_node = s.get("node_type", "local")
-            ws = s.get("workspace") or ""
-            node = (f"☁️ {raw_node[4:]}" if raw_node.startswith("ssh:") else (f"🖥️ {ws}" if ws else "🖥️ 本地"))
+            node = "☁️ 远程" if s.get("node_type", "").startswith("ssh:") else "🖥️ 本地"
             title = s.get("title", s["id"][:8]).replace("|", "-")
             cid = s["id"]
             tags = s.get("tags", [])
             tag_str = f" `#{','.join(tags)}`" if tags else ""
             state = s.get("state", "UNKNOWN")
-            if state == "STOPPED" and s.get("live_state"):
-                state = f"MONITOR({s.get('live_state')})"
-            st_icon = "🟢" if any(k in state for k in ("BUSY", "IDLE")) else ("🎉" if "COMPLETED" in state else ("❓" if "WAITING" in state else ("❌" if "ERROR" in state else "👁️")))
+            st_icon = "🟢" if state in ("BUSY", "IDLE") else ("🎉" if state == "COMPLETED" else "⏸️")
             step = s.get("current_step", 0)
             vel = s.get("step_velocity", 0.0)
             vel_str = f" (+{vel}/分)" if vel > 0 else ""
             sent = s.get("sent_count", 0)
-            snippet = (s.get("error") or s.get("last_snippet") or s.get("prompt") or "").replace("|", "-").replace("\n", " ")[:60]
+            snippet = (s.get("last_snippet") or s.get("prompt") or "").replace("|", "-").replace("\n", " ")[:60]
             md.append(f"| {node} | **{title}**{tag_str} | `{cid[:8]}..` | {st_icon} {state} | Step {step}{vel_str} | {sent} 轮 | {snippet} |")
 
         md.append("\n---\n*Report generated automatically by Antigravity Auto-Pilot Engine.*")
         return "\n".join(md)
 
-    def _get_step_info(self, node: str, conv_id: str) -> Dict[str, Any]:
-        default_res: Dict[str, Any] = {
-            "step_index": -1,
-            "finished": False,
-            "is_completed": False,
-            "is_empty": False,
-            "waiting_decision": False,
-            "snippet": "",
-            "db_status": "",
-            "not_fully_idle": False,
-            "workspace": "",
-            "title": "",
-            "is_subagent": False,
-            "error": "",
-        }
-
+    def _get_step_info(self, node: str, conv_id: str):
         # 1. 远程 SSH 检查
         if node.startswith("ssh:"):
             host = node.split("ssh:")[1]
@@ -1140,119 +932,50 @@ class MultiSessionDaemon:
                         if line.startswith("{") and line.endswith("}"):
                             data = json.loads(line)
                             step_idx = data.get("step_index", -1)
-                            finished = bool(data.get("is_turn_complete", False))
+                            finished = data.get("is_turn_complete", False)
                             snippet = data.get("snippet", "")
                             content_lower = snippet.lower()
                             is_completed = finished and any(k in content_lower for k in COMPLETION_KEYWORDS)
-                            default_res.update({
-                                "step_index": step_idx,
-                                "finished": finished,
-                                "is_completed": is_completed,
-                                "snippet": snippet,
-                            })
-                            return default_res
+                            return step_idx, finished, is_completed, snippet
                 else:
-                    err = f"远程离线/拒绝连接: {res.stderr.strip()[:40]}"
-                    default_res["snippet"] = err
-                    default_res["error"] = err
-                    return default_res
+                    return -1, False, False, f"远程离线/拒绝连接: {res.stderr.strip()[:40]}"
             except Exception as e:
-                err = f"检测异常: {e}"
-                default_res["snippet"] = err
-                default_res["error"] = err
-                return default_res
-            return default_res
+                return -1, False, False, f"检测异常: {e}"
+            return -1, False, False, ""
 
-        # 2. 本地检查（结合 Antigravity 2.0 conversation_summaries.db 与 transcript.jsonl 尾部）
-        meta = get_conversation_summary(conv_id)
-        if meta:
-            default_res["db_status"] = meta.get("status", "")
-            default_res["not_fully_idle"] = bool(meta.get("not_fully_idle", False))
-            default_res["workspace"] = meta.get("workspace", "")
-            default_res["title"] = (meta.get("title") or meta.get("preview") or "").strip()
-            default_res["is_subagent"] = bool(meta.get("is_subagent", False))
-
+        # 2. 本地检查
         transcript_path = os.path.join(BRAIN_DIR, conv_id, ".system_generated", "logs", "transcript.jsonl")
         if not os.path.exists(transcript_path):
-            default_res["error"] = "未找到会话转录文件"
-            default_res["snippet"] = "未找到会话转录文件"
-            return default_res
-
+            return -1, False, False, ""
         try:
-            tail_steps = self._read_transcript_tail(transcript_path, tail_lines=6)
-            if not tail_steps:
-                if meta and meta.get("step_count", 0) > 0:
-                    default_res["step_index"] = int(meta["step_count"])
-                else:
-                    default_res["is_empty"] = True
-                    default_res["snippet"] = "新建空白会话（尚未发消息）"
-                return default_res
+            with open(transcript_path, "r", encoding="utf-8", errors="ignore") as f:
+                lines = [l.strip() for l in f if l.strip()]
+            if not lines:
+                return -1, False, False, ""
 
-            last_step = tail_steps[-1]
-            prev_step = tail_steps[-2] if len(tail_steps) >= 2 else {}
+            last_step = None
+            for line_str in reversed(lines[-5:]):
+                try:
+                    last_step = json.loads(line_str)
+                    break
+                except Exception:
+                    continue
+            if not last_step:
+                return -1, False, False, ""
+
             step_idx = last_step.get("step_index", -1)
             step_type = last_step.get("type", "")
             status = last_step.get("status", "")
-            tool_calls = last_step.get("tool_calls") or []
+            tool_calls = last_step.get("tool_calls", [])
             content = str(last_step.get("content", ""))
 
-            def _has_ask_q(calls: Any) -> bool:
-                return any(
-                    isinstance(t, dict) and "ask_question" in str(t.get("name") or t.get("tool") or "")
-                    for t in (calls or [])
-                )
-
-            waiting_decision = _has_ask_q(tool_calls) or (
-                step_type == "GENERIC"
-                and status in ("RUNNING", "WAITING", "PENDING")
-                and _has_ask_q(prev_step.get("tool_calls") or [])
-            )
-
-            db_status = default_res["db_status"]
-            not_fully_idle = default_res["not_fully_idle"]
-            db_flagged_running = (
-                db_status in ("CASCADE_RUN_STATUS_RUNNING", "CASCADE_RUN_STATUS_BUSY", "CASCADE_RUN_STATUS_CANCELING")
-                or not_fully_idle
-            )
-            ls_addr, _ = get_active_ls_env()
-            try:
-                transcript_recent = (time.time() - os.path.getmtime(transcript_path)) < 300.0
-            except Exception:
-                transcript_recent = False
-            db_running = db_flagged_running and (bool(ls_addr) or transcript_recent)
-
-            is_finished = (
-                not waiting_decision
-                and not db_running
-                and step_type == "PLANNER_RESPONSE"
-                and status == "DONE"
-                and len(tool_calls) == 0
-            )
+            is_finished = (step_type == "PLANNER_RESPONSE" and status == "DONE" and len(tool_calls) == 0)
             content_lower = content.lower()
             is_completed = is_finished and any(k.lower() in content_lower for k in COMPLETION_KEYWORDS)
 
-            clean_content = content.strip()
-            if "<USER_REQUEST>" in clean_content:
-                clean_content = clean_content.split("<USER_REQUEST>")[1].split("</USER_REQUEST>")[0].strip()
-            if clean_content:
-                snippet = clean_content[:90].replace("\n", " ")
-            elif tool_calls:
-                tnames = [str(t.get("name") or t.get("tool") or "tool") for t in tool_calls[:3] if isinstance(t, dict)]
-                snippet = f"调用工具: {', '.join(tnames)}"
-            else:
-                snippet = f"{step_type} ({status})"
-
-            default_res.update({
-                "step_index": step_idx,
-                "finished": is_finished,
-                "is_completed": is_completed,
-                "waiting_decision": waiting_decision,
-                "snippet": snippet,
-            })
-            return default_res
-        except Exception as e:
-            default_res["error"] = str(e)[:120]
-            return default_res
+            return step_idx, is_finished, is_completed, content[:80].replace("\n", " ")
+        except Exception:
+            return -1, False, False, ""
 
     def get_session_transcript(self, conv_id: str, node: str = "local", limit: int = 15) -> List[Dict[str, Any]]:
         conv_id = conv_id.strip()
@@ -1287,11 +1010,13 @@ class MultiSessionDaemon:
             return []
 
         try:
-            raw_steps = self._read_transcript_tail(transcript_path, tail_lines=max(1, limit))
+            with open(transcript_path, "r", encoding="utf-8", errors="ignore") as f:
+                lines = [l.strip() for l in f if l.strip()]
 
             steps = []
-            for step in raw_steps:
+            for line_str in lines[-limit:]:
                 try:
+                    step = json.loads(line_str)
                     content = str(step.get("content", "")).strip()
                     if "<USER_REQUEST>" in content:
                         content = content.split("<USER_REQUEST>")[1].split("</USER_REQUEST>")[0].strip()
@@ -1311,8 +1036,8 @@ class MultiSessionDaemon:
             return []
 
     def _worker_loop(self):
-        """High-performance concurrent loop servicing all monitored sessions."""
-        while not self._shutting_down:
+        """High-performance concurrent loop servicing all active sessions."""
+        while True:
             try:
                 # 1. 外部 config.json 热重载检测
                 try:
@@ -1323,105 +1048,64 @@ class MultiSessionDaemon:
                 except Exception:
                     pass
 
+                with self.lock:
+                    if not self.is_running:
+                        active_sessions = []
+                    else:
+                        active_sessions = [dict(s) for s in self.sessions.values() if s.get("enabled")]
+
+
+                if not active_sessions:
+                    time.sleep(1.0)
+                    continue
+
                 now = time.time()
 
-                # 2. 自动嗅探与纳管新活动主会话 (Auto-adopt sessions, 跳过子代理与已终止会话)
-                if self.is_running and self.strategy.get("auto_adopt_sessions") and (now - self._last_auto_adopt_check > 25.0):
+                # 2. 自动嗅探与纳管新活动会话 (Auto-adopt sessions)
+                if self.strategy.get("auto_adopt_sessions") and (now - self._last_auto_adopt_check > 25.0):
                     self._last_auto_adopt_check = now
                     try:
-                        recent_convs = self.scan_conversations(node="local", limit=8, force=True)
+                        recent_convs = self.scan_conversations(node="local", limit=6, force=True)
                         for c in recent_convs:
                             cid = c.get("id")
-                            if (
-                                cid
-                                and cid not in self.sessions
-                                and not c.get("is_subagent")
-                                and not c.get("killed")
-                                and not c.get("is_empty")
-                                and c.get("step_count", 0) >= 1
-                            ):
-                                title = (c.get("title") or c.get("preview") or f"本地·{cid[:8]}")[:40]
+                            if cid and cid not in self.sessions and c.get("step_count", 0) >= 1:
+                                prev = c.get("preview", "")[:35] or f"本地·{cid[:8]}"
                                 self.add_session(
                                     conv_id=cid,
                                     node_type="local",
-                                    title=title,
+                                    title=prev,
                                     prompt=self.continue_prompt or "继续",
                                     cooldown=max(1.0, float(self.idle_delay_seconds)),
                                     max_turns=9999,
                                     enabled=True
                                 )
-                                self.add_log(f"自动嗅探并纳管新活动会话 [{title}] (当前第 {c.get('step_count')} 步)", "SUCCESS", session_tag="AUTO-ADOPT")
+                                self.add_log(f"自动嗅探并纳管新活动会话 [{prev}] (当前第 {c.get('step_count')} 步)", "SUCCESS", session_tag="AUTO-ADOPT")
                     except Exception:
                         pass
 
-                with self.lock:
-                    # 本地会话无论是否开启自动注入，都保持只读状态监控；远程 SSH 仅在启用巡航时高频轮询
-                    poll_sessions = [
-                        dict(s) for s in self.sessions.values()
-                        if (self.is_running and s.get("enabled")) or not s.get("node_type", "").startswith("ssh:")
-                    ]
-
-                if not poll_sessions:
-                    time.sleep(1.2)
-                    continue
-
-                # Process all monitored sessions concurrently using thread pool
+                # Process all active sessions concurrently using thread pool
                 futures = {
                     self.executor.submit(self._get_step_info, s["node_type"], s["id"]): s
-                    for s in poll_sessions
+                    for s in active_sessions
                 }
 
                 for future in concurrent.futures.as_completed(futures, timeout=10.0):
                     s = futures[future]
                     cid = s["id"]
                     try:
-                        info = future.result()
+                        step_idx, finished, is_completed, snippet = future.result()
                     except Exception as e:
-                        info = {
-                            "step_index": -1,
-                            "finished": False,
-                            "is_completed": False,
-                            "waiting_decision": False,
-                            "snippet": str(e),
-                            "db_status": "",
-                            "not_fully_idle": False,
-                            "workspace": "",
-                            "title": "",
-                            "error": str(e),
-                        }
-
-                    step_idx = info.get("step_index", -1)
-                    finished = bool(info.get("finished", False))
-                    is_completed = bool(info.get("is_completed", False))
-                    waiting_decision = bool(info.get("waiting_decision", False))
-                    snippet = info.get("snippet", "")
-                    probe_error = info.get("error", "")
+                        step_idx, finished, is_completed, snippet = -1, False, False, str(e)
 
                     # State machine transition for this session
                     with self.lock:
                         curr = self.sessions.get(cid)
-                        if not curr:
+                        if not curr or not curr.get("enabled"):
                             continue
 
                         curr["current_step"] = step_idx
                         curr["last_snippet"] = snippet
                         curr["updated_at"] = now
-                        if info.get("workspace"):
-                            curr["workspace"] = info["workspace"]
-                        curr["db_status"] = info.get("db_status", "")
-                        curr["not_fully_idle"] = bool(info.get("not_fully_idle", False))
-                        curr["waiting_decision"] = waiting_decision
-
-                        # Upgrade generic/placeholder title if Antigravity DB has a real title
-                        db_title = (info.get("title") or "").strip()
-                        cur_title = (curr.get("title") or "").strip()
-                        if db_title and (
-                            not cur_title
-                            or cur_title == cid[:12]
-                            or cur_title.startswith("local·")
-                            or cur_title.startswith("🌱")
-                        ):
-                            curr["title"] = db_title[:45]
 
                         # Dynamically compute step velocity (steps/minute)
                         if step_idx >= 0:
@@ -1448,77 +1132,17 @@ class MultiSessionDaemon:
                         else:
                             curr["step_velocity"] = 0.0
 
-                        # If step moved forward after a prior injection error, clear transient error state
-                        if step_idx >= 0 and curr.get("last_error_step", -1) >= 0 and step_idx != curr.get("last_error_step"):
-                            curr["error"] = ""
-                            curr["fail_count"] = 0
-                            curr["next_retry_at"] = 0.0
-                            curr["last_error_step"] = -1
-
-                        # Compute real underlying Antigravity session live_state
-                        if step_idx == -1 and (probe_error or "拒绝连接" in snippet):
-                            live_state = "OFFLINE"
-                        elif info.get("is_empty"):
-                            live_state = "EMPTY"
-                        elif waiting_decision:
-                            live_state = "WAITING_DECISION"
-                        elif is_completed:
-                            live_state = "COMPLETED"
-                        elif finished:
-                            live_state = "IDLE"
-                        else:
-                            live_state = "BUSY"
-                        curr["live_state"] = live_state
-
-                        if live_state == "BUSY":
-                            if curr.get("busy_start_time") is None:
-                                curr["busy_start_time"] = now
-                            curr["busy_duration"] = int(now - curr["busy_start_time"])
-                        else:
-                            curr["busy_start_time"] = None
-                            curr["busy_duration"] = 0
-
-                        # 仅监控模式（未开启自动注入）：只更新真实状态，不执行任何自动触发
-                        if not (self.is_running and curr.get("enabled")):
-                            curr["state"] = "STOPPED"
-                            curr["idle_start_time"] = None
-                            curr["cooldown_remaining"] = 0.0
-                            continue
-
-                        # 异步注入进行中：防止重复触发
-                        if curr.get("is_triggering"):
-                            curr["state"] = "TRIGGERING"
-                            continue
-
-                        # 等待用户人工回答 ask_question：不强行覆盖用户输入
-                        if waiting_decision:
-                            if curr.get("state") != "WAITING_DECISION":
-                                self.add_log("检测到会话正等待人工回答 (ask_question)，本轮暂停自动注入", "WARN", session_tag=curr["title"][:10])
-                            curr["state"] = "WAITING_DECISION"
-                            curr["idle_start_time"] = None
-                            curr["cooldown_remaining"] = 0.0
-                            continue
-
                         # 1. 任务完成判定
                         if is_completed:
                             curr["state"] = "COMPLETED"
                             curr["enabled"] = False
-                            curr["idle_start_time"] = None
-                            curr["cooldown_remaining"] = 0.0
                             self.add_log(f"🎉 达成任务完工声明: '{snippet}'", "SUCCESS", session_tag=curr["title"][:10])
                             self.send_webhook("COMPLETE", curr["title"], cid, f"达成完工目标声明: {snippet}")
                             self.save_config()
                             continue
 
-                        # 2. 步骤完结判定与消抖/错误退避
-                        if finished and step_idx != curr.get("last_handled_step", -1):
-                            next_retry_at = float(curr.get("next_retry_at", 0.0) or 0.0)
-                            if now < next_retry_at:
-                                curr["state"] = "ERROR"
-                                curr["idle_start_time"] = None
-                                curr["cooldown_remaining"] = round(next_retry_at - now, 1)
-                                continue
-
+                        # 2. 步骤完结判定与消抖
+                        if finished and step_idx != curr["last_handled_step"]:
                             if curr["idle_start_time"] is None:
                                 curr["idle_start_time"] = now
                                 curr["state"] = "STABILIZING"
@@ -1526,11 +1150,12 @@ class MultiSessionDaemon:
                             elapsed = now - curr["idle_start_time"]
                             remain = max(0.0, curr["cooldown"] - elapsed)
                             curr["cooldown_remaining"] = round(remain, 1)
-                            curr["state"] = "STABILIZING"
 
                             if elapsed >= curr["cooldown"]:
                                 curr["state"] = "TRIGGERING"
-                                curr["is_triggering"] = True
+                                curr["sent_count"] += 1
+                                current_count = curr["sent_count"]
+                                curr["last_handled_step"] = step_idx
                                 curr["idle_start_time"] = None
                                 curr["cooldown_remaining"] = 0.0
                                 p_text = curr["prompt"]
@@ -1538,86 +1163,70 @@ class MultiSessionDaemon:
                                 title = curr["title"]
                                 max_t = curr["max_turns"]
 
+                                # Trigger outside lock
                                 threading.Thread(
                                     target=self._async_inject,
-                                    args=(node, cid, p_text, step_idx, title, max_t),
+                                    args=(node, cid, p_text, current_count, step_idx, title, max_t),
                                     daemon=True
                                 ).start()
                         else:
                             curr["idle_start_time"] = None
                             curr["cooldown_remaining"] = 0.0
-                            if live_state == "OFFLINE":
+                            if step_idx == -1 and "拒绝连接" in snippet:
                                 curr["state"] = "OFFLINE"
-                            elif live_state == "BUSY":
+                                curr["busy_start_time"] = None
+                                curr["busy_duration"] = 0
+                            elif not finished:
                                 curr["state"] = "BUSY"
+                                if curr.get("busy_start_time") is None:
+                                    curr["busy_start_time"] = now
+                                curr["busy_duration"] = int(now - curr["busy_start_time"])
                             else:
                                 curr["state"] = "IDLE"
+                                curr["busy_start_time"] = None
+                                curr["busy_duration"] = 0
 
             except Exception as e:
                 print(f"[Worker Error] {e}", flush=True)
 
             time.sleep(1.2)
 
-    def _async_inject(self, node: str, cid: str, p_text: str,
+    def _async_inject(self, node: str, cid: str, p_text: str, current_count: int,
                       step_idx: int, title: str, max_t: int):
-        ok, err_detail = self.send_message_detailed(node, cid, p_text)
-        reached_max = False
-        new_count = 0
-
         with self.lock:
-            curr = self.sessions.get(cid)
-            if curr is not None:
-                curr["is_triggering"] = False
-                if ok:
-                    curr["sent_count"] += 1
-                    new_count = curr["sent_count"]
-                    curr["last_handled_step"] = step_idx
-                    curr["fail_count"] = 0
-                    curr["next_retry_at"] = 0.0
-                    curr["last_error_step"] = -1
-                    curr["error"] = ""
-                    curr["state"] = "BUSY"
-                    self.injection_timestamps.append(time.time())
-                    if new_count >= max_t:
-                        curr["enabled"] = False
-                        curr["state"] = "STOPPED"
-                        reached_max = True
-                else:
-                    fail_count = curr.get("fail_count", 0) + 1
-                    curr["fail_count"] = fail_count
-                    curr["last_error_step"] = step_idx
-                    curr["error"] = err_detail or "注入失败"
-                    if self.strategy.get("smart_backoff", True):
-                        backoff = min(60.0, max(3.0, curr.get("cooldown", 3.0)) * (1.6 ** (fail_count - 1)))
-                    else:
-                        backoff = max(5.0, curr.get("cooldown", 3.0))
-                    curr["next_retry_at"] = time.time() + backoff
-                    curr["cooldown_remaining"] = round(backoff, 1)
-                    curr["state"] = "ERROR"
-
-        if ok:
-            self.add_log(
-                f"检测到第 {step_idx} 步完成，已成功注入第 {new_count} 轮: \"{p_text}\"",
-                "SUCCESS",
-                session_tag=title[:10]
-            )
-            self.send_webhook("TRIGGER", title, cid, f"检测到第 {step_idx} 步完成，已成功注入第 {new_count} 轮: \"{p_text}\"")
-            if reached_max:
-                self.add_log(f"已达到最大轮数 ({max_t})，会话自驱完成并安全退出。", "SUCCESS", session_tag=title[:10])
-                self.send_webhook("COMPLETE", title, cid, f"已达到最大设定轮数 ({max_t})，安全完成巡航。")
-                self.save_config()
+            self.injection_timestamps.append(time.time())
+        self.add_log(f"检测到第 {step_idx} 步完成，自动注入第 {current_count} 轮: \"{p_text}\"", "TRIGGER", session_tag=title[:10])
+        self.send_webhook("TRIGGER", title, cid, f"检测到第 {step_idx} 步完成，已注入第 {current_count} 轮: \"{p_text}\"")
+        ok = self.send_message(node, cid, p_text)
+        if not ok:
+            self.send_webhook("ERROR", title, cid, f"第 {current_count} 轮指令注入失败")
+            with self.lock:
+                if cid in self.sessions and self.strategy.get("smart_backoff", True):
+                    fail_count = self.sessions[cid].get("fail_count", 0) + 1
+                    self.sessions[cid]["fail_count"] = fail_count
+                    backoff = min(60.0, self.sessions[cid].get("cooldown", 3.0) * (1.6 ** fail_count))
+                    self.sessions[cid]["cooldown_remaining"] = round(backoff, 1)
         else:
-            self.send_webhook("ERROR", title, cid, f"第 {step_idx} 步自动注入失败: {err_detail or '未知错误'}")
+            with self.lock:
+                if cid in self.sessions:
+                    self.sessions[cid]["fail_count"] = 0
+
+        if current_count >= max_t:
+            with self.lock:
+                if cid in self.sessions:
+                    self.sessions[cid]["enabled"] = False
+                    self.sessions[cid]["state"] = "STOPPED"
+            self.add_log(f"已达到最大轮数 ({max_t})，会话自驱完成并安全退出。", "SUCCESS", session_tag=title[:10])
+            self.send_webhook("COMPLETE", title, cid, f"已达到最大设定轮数 ({max_t})，安全完成巡航。")
+            self.save_config()
 
     def get_status_payload(self) -> Dict[str, Any]:
-        addr, _ = get_active_ls_env(force_refresh=False)
         with self.lock:
             lsp_exists = os.path.exists(LS_EXE) or os.path.exists(AGENTAPI_BAT)
-            sess_list = [dict(s) for s in self.sessions.values()]
+            sess_list = list(self.sessions.values())
             running_sessions = [s for s in sess_list if s.get("enabled")]
-            busy_sessions = [s for s in sess_list if s.get("state") == "BUSY" or (not s.get("enabled") and s.get("live_state") == "BUSY")]
+            busy_sessions = [s for s in sess_list if s.get("state") == "BUSY"]
             stabilizing_sessions = [s for s in sess_list if s.get("state") == "STABILIZING"]
-            error_sessions = [s for s in sess_list if s.get("state") == "ERROR" or s.get("error")]
             total_sent = sum(s.get("sent_count", 0) for s in sess_list)
 
             # Fallback legacy fields for single-session backward compatibility
@@ -1630,16 +1239,11 @@ class MultiSessionDaemon:
                 "total_count": len(sess_list),
                 "busy_count": len(busy_sessions),
                 "stabilizing_count": len(stabilizing_sessions),
-                "error_count": len(error_sessions),
                 "total_sent_count": total_sent,
                 "sessions": sess_list,
                 "node_type": self.node_type,
-                "lsp_ok": bool(addr) or any(s.get("node_type", "").startswith("ssh:") for s in sess_list),
-                "lsp_bin_ok": lsp_exists,
-                "lsp_addr": addr or "",
+                "lsp_ok": lsp_exists or any(s.get("node_type", "").startswith("ssh:") for s in sess_list),
                 "lsp_path": LS_EXE if os.path.exists(LS_EXE) else AGENTAPI_BAT,
-                "brain_dir": BRAIN_DIR,
-                "summaries_db_exists": os.path.exists(SUMMARIES_DB),
                 "pid": os.getpid(),
 
                 # Legacy compatibility
@@ -1663,12 +1267,6 @@ class AutoPilotHTTPHandler(SimpleHTTPRequestHandler):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=WEB_DIR, **kwargs)
-
-    def end_headers(self):
-        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
-        self.send_header("Pragma", "no-cache")
-        self.send_header("Expires", "0")
-        super().end_headers()
 
     def log_message(self, format, *args):
         pass
@@ -1696,9 +1294,6 @@ class AutoPilotHTTPHandler(SimpleHTTPRequestHandler):
 
         if path == "/api/status":
             self.send_json(daemon.get_status_payload())
-        elif path == "/api/lsp/probe":
-            probe = probe_ls_connection(force_refresh=True)
-            self.send_json(probe)
         elif path == "/api/conversations":
             node = daemon.node_type
             if "node=" in self.path:
@@ -1846,8 +1441,8 @@ class AutoPilotHTTPHandler(SimpleHTTPRequestHandler):
         elif path == "/api/sessions/trigger_once":
             cid = body.get("conv_id", "").strip()
             text = body.get("text", None)
-            ok, err_detail = daemon.trigger_session_detailed(cid, text)
-            self.send_json({"ok": ok, "error": err_detail, "status": daemon.get_status_payload()})
+            ok = daemon.trigger_session(cid, text)
+            self.send_json({"ok": ok, "status": daemon.get_status_payload()})
 
         elif path == "/api/sessions/pin":
             cid = body.get("conv_id", "").strip()
@@ -1902,22 +1497,10 @@ class AutoPilotHTTPHandler(SimpleHTTPRequestHandler):
                             "cooldown": float(s.get("cooldown", 3.0)),
                             "max_turns": int(s.get("max_turns", 9999)),
                             "enabled": bool(s.get("enabled", True)),
-                            "pinned": bool(s.get("pinned", False)),
-                            "tags": s.get("tags", []),
                             "state": "IDLE" if s.get("enabled", True) else "STOPPED",
-                            "live_state": "UNKNOWN",
-                            "workspace": s.get("workspace", ""),
-                            "db_status": "",
-                            "not_fully_idle": False,
-                            "waiting_decision": False,
-                            "is_triggering": False,
-                            "fail_count": 0,
-                            "next_retry_at": 0.0,
-                            "last_error_step": -1,
                             "current_step": s.get("current_step", 0),
                             "last_handled_step": -1,
                             "sent_count": s.get("sent_count", 0),
-                            "step_velocity": 0.0,
                             "cooldown_remaining": 0.0,
                             "idle_start_time": None,
                             "last_snippet": "",
@@ -1957,11 +1540,8 @@ class AutoPilotHTTPHandler(SimpleHTTPRequestHandler):
                 with daemon.lock:
                     if daemon.sessions:
                         cid = list(daemon.sessions.keys())[0]
-            if cid:
-                ok, err_detail = daemon.trigger_session_detailed(cid, text)
-            else:
-                ok, err_detail = False, "未指定会话 ID"
-            self.send_json({"ok": ok, "error": err_detail, "message": "已发送单次注入" if ok else f"发送失败: {err_detail}"})
+            ok = daemon.trigger_session(cid, text) if cid else False
+            self.send_json({"ok": ok, "message": "已发送单次注入" if ok else "发送失败"})
 
         elif path == "/api/save_config":
             daemon.save_config()
@@ -2037,22 +1617,17 @@ class AutoPilotHTTPHandler(SimpleHTTPRequestHandler):
                 })
 
         elif path == "/api/restart":
-            srv = self.server
             self.send_json({"ok": True, "message": "服务正在重启中..."})
             def restart_worker():
-                time.sleep(0.35)
-                daemon.shutdown()
+                time.sleep(0.5)
+                daemon.stop_all()
                 try:
-                    srv.shutdown()
-                    srv.server_close()
-                except Exception:
-                    pass
-                try:
-                    clean_env = sanitize_agent_env(clear_ls_overrides=True)
                     if getattr(sys, "frozen", False):
-                        subprocess.Popen([sys.executable], cwd=APP_DIR, env=clean_env)
+                        subprocess.Popen([sys.executable], cwd=APP_DIR)
                     else:
-                        subprocess.Popen([sys.executable, "-u", os.path.abspath(__file__)], cwd=APP_DIR, env=clean_env)
+                        launcher_script = os.path.join(APP_DIR, "app_launcher.py")
+                        target = launcher_script if os.path.exists(launcher_script) else os.path.abspath(__file__)
+                        subprocess.Popen([sys.executable, target], cwd=APP_DIR)
                 except Exception as e:
                     print(f"Restart error: {e}", flush=True)
                 os._exit(0)
@@ -2064,8 +1639,6 @@ class AutoPilotHTTPHandler(SimpleHTTPRequestHandler):
 
 class DualStackHTTPServer(ThreadingHTTPServer):
     """Dual-stack HTTP server enabling simultaneous IPv4 and IPv6 handling."""
-    allow_reuse_address = True
-
     def server_bind(self):
         try:
             self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
@@ -2075,20 +1648,12 @@ class DualStackHTTPServer(ThreadingHTTPServer):
 
 
 def make_http_server(port: int):
-    last_err = None
-    for _ in range(8):
-        try:
-            class IPv6DualStack(DualStackHTTPServer):
-                address_family = socket.AF_INET6
-            return IPv6DualStack(("", port), AutoPilotHTTPHandler)
-        except Exception:
-            try:
-                srv = ThreadingHTTPServer(("0.0.0.0", port), AutoPilotHTTPHandler)
-                return srv
-            except OSError as e:
-                last_err = e
-                time.sleep(0.35)
-    raise last_err if last_err else OSError(f"Failed to bind port {port}")
+    try:
+        class IPv6DualStack(DualStackHTTPServer):
+            address_family = socket.AF_INET6
+        return IPv6DualStack(("", port), AutoPilotHTTPHandler)
+    except Exception:
+        return ThreadingHTTPServer(("0.0.0.0", port), AutoPilotHTTPHandler)
 
 
 def main():
@@ -2109,7 +1674,7 @@ def main():
     except KeyboardInterrupt:
         print("\n正在停止服务...")
     finally:
-        daemon.shutdown()
+        daemon.stop_all()
         server.server_close()
         print("[*] 服务已退出。")
 

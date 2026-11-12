@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>⚡ Antigravity Auto-Pilot 控制中心 ｜ 多会话并发持续开发仪表盘</title>
-  <link rel="stylesheet" href="style.css?v=2.4">
+  <link rel="stylesheet" href="style.css">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;800&family=Outfit:wght@400;500;600;700;800;900&family=Noto+Sans+SC:wght@400;500;700;900&display=swap" rel="stylesheet">
@@ -24,7 +24,7 @@
         </div>
         <div class="brand-text">
           <div class="brand-title">ANTIGRAVITY <span>AUTO-PILOT</span></div>
-          <div class="brand-subtitle">Antigravity 会话实时监控引擎 · 多会话并发巡航 · LSP 跨工作区静默注入</div>
+          <div class="brand-subtitle">多会话并发巡航引擎 · 跨节点混合调度 · LSP 通道静默注入</div>
         </div>
       </div>
 
@@ -32,9 +32,9 @@
         <button class="btn-pill-restart" id="headerRestartBtn" title="重启 Auto-Pilot 后端守护进程">
           <span>🔄 重启服务</span>
         </button>
-        <div class="lsp-badge" id="lspStatusBadge" title="Antigravity Language Server API 与会话数据库状态">
+        <div class="lsp-badge" id="lspStatusBadge">
           <span class="lsp-dot"></span>
-          <span id="lspStatusText">LSP API: 检测中</span>
+          <span id="lspStatusText">LSP API: 就绪</span>
         </div>
         <div class="status-pill stopped" id="mainStatusPill">
           <span class="status-indicator"></span>
@@ -82,11 +82,11 @@
       <div class="metric-card">
         <div class="metric-header">
           <span class="metric-icon">🌐</span>
-          <span class="metric-label">节点与数据源健康</span>
+          <span class="metric-label">纳管节点分布</span>
         </div>
         <div class="metric-value conv-val" id="metricNodeDist" style="font-size: 20px;">0 本地 + 0 远程</div>
         <div class="metric-foot" id="metricNodeDetail">
-          <span>Summaries DB + Transcript + LSP</span>
+          <span>跨设备多路复用与心跳保活</span>
         </div>
       </div>
     </section>
@@ -151,11 +151,12 @@
           <button class="btn-pill-action" id="openStrategyModalBtn" title="配置智能重试退避与自动嗅探">⚙️ 策略设置</button>
           <button class="btn-pill-action" id="openBackupModalBtn">💾 备份/导入</button>
           <button class="btn-pill-action" id="openReportModalBtn" title="查看并复制全矩阵 Markdown 交付总结报告">📊 交付报告</button>
+          <a href="/preview" target="_blank" class="btn-pill-action" id="openPreviewBtn" style="color: #38bdf8; border-color: rgba(56, 189, 248, 0.35);">📱 微光账单仿真</a>
           <button class="btn-pill-action" id="openWebhookModalBtn">🔔 告警推送</button>
           <button class="btn-pill-action" id="toggleTelemetryBtn">📈 效能图表</button>
           <button class="btn-pill-action" id="startAllFleetBtn">▶ 全部开启</button>
           <button class="btn-pill-action" id="stopAllFleetBtn" style="color: #f43f5e; border-color: rgba(244, 63, 94, 0.3);">⏹ 全部暂停</button>
-          <a href="#radarSection" class="btn-pill-action primary" id="enrollScrollBtn">➕ 发现/纳管会话</a>
+          <a href="#enrollSection" class="btn-pill-action primary" id="enrollScrollBtn">➕ 纳管新会话</a>
         </div>
       </div>
 
@@ -167,15 +168,14 @@
         </label>
         <div class="fleet-search-box">
           <span class="search-icon">🔍</span>
-          <input type="text" id="fleetSearchInput" placeholder="快速检索会话标题、工作区、ID、设备或状态..." autocomplete="off">
+          <input type="text" id="fleetSearchInput" placeholder="快速检索会话标题、ID、设备或执行状态..." autocomplete="off">
           <button class="clear-search-btn" id="clearSearchBtn" style="display: none;">✕</button>
         </div>
         <div class="fleet-filter-pills" id="fleetFilterPills">
           <button type="button" class="filter-pill active" data-filter="all">全部 (<span id="countAll">0</span>)</button>
           <button type="button" class="filter-pill" data-filter="active">巡航中 (<span id="countActive">0</span>)</button>
-          <button type="button" class="filter-pill" data-filter="busy">运行中 (<span id="countBusy">0</span>)</button>
-          <button type="button" class="filter-pill" data-filter="stopped">仅监控 (<span id="countStopped">0</span>)</button>
-          <button type="button" class="filter-pill" data-filter="attention">⚠️ 待关注 (<span id="countAttention">0</span>)</button>
+          <button type="button" class="filter-pill" data-filter="busy">思考中 (<span id="countBusy">0</span>)</button>
+          <button type="button" class="filter-pill" data-filter="stopped">已暂停 (<span id="countStopped">0</span>)</button>
           <button type="button" class="filter-pill" data-filter="local">🖥️ 本地 (<span id="countLocal">0</span>)</button>
           <button type="button" class="filter-pill" data-filter="ssh">☁️ 远程 (<span id="countSsh">0</span>)</button>
         </div>
@@ -211,22 +211,6 @@
 
     </section>
 
-    <!-- 📡 Antigravity 会话实时发现雷达 (Live Session Radar) -->
-    <section class="radar-section" id="radarSection">
-      <div class="section-title-row" style="margin-bottom: 12px;">
-        <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
-          <h3>📡 Antigravity 会话实时雷达 (Live Session Discovery)</h3>
-          <span class="fleet-count-badge" id="radarCountBadge">扫描中...</span>
-        </div>
-        <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
-          <button class="btn-pill-action" id="refreshRadarBtn">🔄 立即扫描</button>
-        </div>
-      </div>
-      <div class="radar-grid" id="radarGrid">
-        <div class="radar-empty">⏳ 正在从 Antigravity 会话索引与日志同步活动会话...</div>
-      </div>
-    </section>
-
     <!-- 参数配置与纳管新会话中心 -->
     <section class="config-section" id="enrollSection">
       <div class="section-title-row">
@@ -248,16 +232,16 @@
             <span class="pill-dot"></span>
             <span class="pill-icon">🖥️</span>
             <div class="pill-info">
-              <span class="pill-name">本地 Antigravity (Windows)</span>
-              <span class="pill-sub">~/.gemini/antigravity/brain · conversation_summaries.db</span>
+              <span class="pill-name">本地开发区 (Local Windows)</span>
+              <span class="pill-sub">~/.gemini/antigravity-ide/brain</span>
             </div>
           </button>
           <button class="node-pill" id="nodeBtnWestc" data-node="ssh:seetacloud-westc">
             <span class="pill-dot"></span>
             <span class="pill-icon">☁️</span>
             <div class="pill-info">
-              <span class="pill-name">远程 SSH 节点 (seetacloud-westc)</span>
-              <span class="pill-sub">~/.gemini/antigravity-ide/brain · 可选远程扫描</span>
+              <span class="pill-name">恒源云西区 (seetacloud-westc)</span>
+              <span class="pill-sub">端口 17090 · 自动保活</span>
             </div>
           </button>
         </div>
@@ -271,7 +255,7 @@
             <span class="config-hint" id="convCountHint">已扫描 0 个活跃对话</span>
           </label>
           <div class="search-filter-wrap" style="margin-bottom: 8px;">
-            <input type="text" class="custom-input" id="convSearchInput" placeholder="🔍 实时搜索会话标题、工作区、关键词或 ID..." style="padding: 7px 12px; font-size: 12px; background: rgba(0, 0, 0, 0.35); border-color: rgba(255, 255, 255, 0.12);">
+            <input type="text" class="custom-input" id="convSearchInput" placeholder="🔍 实时搜索会话标题、关键词或 ID..." style="padding: 7px 12px; font-size: 12px; background: rgba(0, 0, 0, 0.35); border-color: rgba(255, 255, 255, 0.12);">
           </div>
           <div class="select-wrapper">
             <select class="custom-select" id="convSelect">
@@ -279,38 +263,24 @@
             </select>
           </div>
           <div class="conv-preview-snippet" id="convPreviewSnippet">
-            会话预览：(请从上方选择或从雷达一键加入)
+            会话预览：(请从上方选择或跟踪最新会话)
           </div>
-          <div class="checkbox-row" style="display:flex; flex-direction:column; align-items:flex-start; gap:8px;">
+          <div class="checkbox-row" style="display:flex; flex-direction:column; gap:8px;">
             <label class="custom-checkbox" title="自动过滤掉在IDE中点击加号新建但未发过任何消息的空会话">
               <input type="checkbox" id="hideEmptyCheckbox" checked>
               <span class="checkmark"></span>
-              <span>隐藏未发消息的空白会话（仅显示有步骤记录的会话）</span>
-            </label>
-            <label class="custom-checkbox" title="过滤掉主会话派生出来的 browser/research 等后台子代理内部会话">
-              <input type="checkbox" id="hideSubagentsCheckbox" checked>
-              <span class="checkmark"></span>
-              <span>隐藏子代理内部会话（如 browser / research subagent）</span>
+              <span>隐藏未发消息的空白会话（仅显示有发言内容的会话）</span>
             </label>
           </div>
 
-          <!-- 添加按钮组 -->
-          <div class="enroll-actions-row">
-            <button class="btn-main btn-start" id="addSessionToFleetBtn" style="flex: 1.4; padding: 12px 16px;">
-              <span class="btn-icon">🚀</span>
-              <div class="btn-content">
-                <span class="btn-title">加入巡航并自动续写</span>
-                <span class="btn-desc">实时监控状态并按策略自动注入指令</span>
-              </div>
-            </button>
-            <button class="btn-secondary btn-monitor-only" id="addMonitorOnlyBtn" style="flex: 1; padding: 12px 14px;" title="仅将该会话加入上方矩阵监控步数、状态与转录，不自动发送消息">
-              <span class="btn-icon">👁️</span>
-              <div class="btn-content">
-                <span class="btn-title" style="font-size: 14px;">仅实时监控</span>
-                <span class="btn-desc">只观测不注入</span>
-              </div>
-            </button>
-          </div>
+          <!-- 添加按钮 -->
+          <button class="btn-main btn-start" id="addSessionToFleetBtn" style="margin-top: 14px; width: 100%; padding: 12px 18px;">
+            <span class="btn-icon">➕</span>
+            <div class="btn-content">
+              <span class="btn-title">将此会话加入并发监控池</span>
+              <span class="btn-desc">启动该会话的自动化多线程巡航</span>
+            </div>
+          </button>
         </div>
 
         <!-- 注入指令与提示词设置 -->
@@ -420,11 +390,15 @@
     <!-- 底部快捷工具与外部导航 -->
     <footer class="app-footer">
       <div class="footer-links">
+        <a href="/preview" target="_blank" class="footer-link">
+          <span>📱</span> 打开微光账单 Web 沉浸式仿真
+        </a>
+        <span class="footer-sep">·</span>
         <button class="footer-link-btn" id="quickTestLspBtn">
-          <span>🔍</span> 主动诊断 Language Server 与会话索引
+          <span>🔍</span> 检测 Language Server 接口响应
         </button>
         <span class="footer-sep">·</span>
-        <span class="footer-copy">© 2026 Antigravity Auto-Pilot · Multi-Session Fleet Monitor</span>
+        <span class="footer-copy">© 2026 Antigravity IDE Automation Suite · Multi-Session Fleet Engine</span>
       </div>
     </footer>
   </div>
@@ -718,6 +692,6 @@
   <!-- 轻量级浮动 Toast -->
   <div class="toast-container" id="toastContainer"></div>
 
-  <script src="app.js?v=2.3"></script>
+  <script src="app.js"></script>
 </body>
 </html>

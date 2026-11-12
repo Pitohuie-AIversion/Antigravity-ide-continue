@@ -28,11 +28,7 @@ VK_V = 0x56
 KEYEVENTF_KEYUP = 0x0002
 
 USER_HOME = os.path.expanduser("~")
-_brain_candidates = [
-    os.path.join(USER_HOME, ".gemini", "antigravity", "brain"),
-    os.path.join(USER_HOME, ".gemini", "antigravity-ide", "brain"),
-]
-BRAIN_DIR = next((c for c in _brain_candidates if os.path.isdir(c)), _brain_candidates[0])
+BRAIN_DIR = os.path.join(USER_HOME, ".gemini", "antigravity-ide", "brain")
 COOLDOWN_SECONDS = 3
 
 
