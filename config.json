@@ -8,7 +8,7 @@
       "prompt": "[/goal](slashCommand;goal) 继续全局开发",
       "cooldown": 3.0,
       "max_turns": 9999,
-      "enabled": true,
+      "enabled": false,
       "pinned": false
     },
     {
@@ -18,8 +18,8 @@
       "prompt": "[/goal](slashCommand;goal) 继续全局开发",
       "cooldown": 3.0,
       "max_turns": 9999,
-      "enabled": true,
-      "pinned": true
+      "enabled": false,
+      "pinned": false
     },
     {
       "id": "d8b02da2-566d-47f4-9134-ba862677c798",
@@ -28,8 +28,8 @@
       "prompt": "[/goal](slashCommand;goal) 继续全局开发",
       "cooldown": 3.0,
       "max_turns": 9999,
-      "enabled": false,
-      "pinned": false
+      "enabled": true,
+      "pinned": true
     },
     {
       "id": "dcd67e14-92ae-4864-866e-c35abc6e66f1",
@@ -39,6 +39,16 @@
       "cooldown": 3.0,
       "max_turns": 9999,
       "enabled": false,
+      "pinned": false
+    },
+    {
+      "id": "43f528b5-c7b4-40ff-ba58-f7f0835d0808",
+      "node_type": "local",
+      "title": "我现在要建立一个三维的场景，我是应该branch还是在main上继续",
+      "prompt": "[/goal](slashCommand;goal) 继续全局开发",
+      "cooldown": 3.0,
+      "max_turns": 9999,
+      "enabled": true,
       "pinned": false
     }
   ],

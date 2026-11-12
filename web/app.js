@@ -380,7 +380,8 @@ function renderFleetMatrix(sessions) {
       const nodeMatch = (s.node_type || '').toLowerCase().includes(q);
       const promptMatch = (s.prompt || '').toLowerCase().includes(q);
       const stateMatch = (s.state || '').toLowerCase().includes(q);
-      return titleMatch || idMatch || nodeMatch || promptMatch || stateMatch;
+      const tagsMatch = (s.tags || []).some(t => t.toLowerCase().includes(q));
+      return titleMatch || idMatch || nodeMatch || promptMatch || stateMatch || tagsMatch;
     });
   }
 
@@ -395,6 +396,9 @@ function renderFleetMatrix(sessions) {
     filtered = filtered.filter(s => !s.node_type || !s.node_type.startsWith('ssh:'));
   } else if (currentFleetFilter === 'ssh') {
     filtered = filtered.filter(s => s.node_type && s.node_type.startsWith('ssh:'));
+  } else if (currentFleetFilter.startsWith('tag:')) {
+    const targetTag = currentFleetFilter.slice(4);
+    filtered = filtered.filter(s => (s.tags || []).includes(targetTag));
   }
 
   // 3. 排序 (置顶优先)
@@ -406,6 +410,33 @@ function renderFleetMatrix(sessions) {
     filtered.sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
   }
   filtered.sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0));
+
+  // 动态同步分类标签筛选按钮
+  const filterPillsContainer = document.getElementById('fleetFilterPills');
+  if (filterPillsContainer) {
+    const allTagsMap = {};
+    (sessions || []).forEach(s => {
+      (s.tags || []).forEach(t => {
+        allTagsMap[t] = (allTagsMap[t] || 0) + 1;
+      });
+    });
+    filterPillsContainer.querySelectorAll('.tag-filter-pill').forEach(el => el.remove());
+    Object.keys(allTagsMap).sort().forEach(tag => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      const isAct = (currentFleetFilter === 'tag:' + tag);
+      btn.className = `filter-pill tag-filter-pill ${isAct ? 'active' : ''}`;
+      btn.dataset.filter = 'tag:' + tag;
+      btn.innerHTML = `🏷️ ${escapeHtml(tag)} (${allTagsMap[tag]})`;
+      btn.addEventListener('click', () => {
+        filterPillsContainer.querySelectorAll('.filter-pill').forEach(p => p.classList.remove('active'));
+        btn.classList.add('active');
+        currentFleetFilter = 'tag:' + tag;
+        renderFleetMatrix(appState.sessions || []);
+      });
+      filterPillsContainer.appendChild(btn);
+    });
+  }
 
   if (filtered.length === 0) {
     fleetGrid.innerHTML = `
@@ -424,6 +455,17 @@ function renderFleetMatrix(sessions) {
     const isRemote = s.node_type && s.node_type.startsWith('ssh:');
     const nodeLabel = isRemote ? '☁️ 恒源云西区' : '🖥️ 本地开发';
     const nodeClass = isRemote ? 'remote' : 'local';
+
+    const tagsHtml = (s.tags && s.tags.length > 0)
+      ? s.tags.map(t => `<span class="session-tag-chip" title="分类标签: ${escapeHtml(t)}">#${escapeHtml(t)}</span>`).join('')
+      : '';
+
+    let velocityHtml = '';
+    if (s.step_velocity && s.step_velocity > 0) {
+      velocityHtml = `<span class="velocity-badge pulse" title="当前推进速率: 每分钟约 ${s.step_velocity} 步">⚡ +${s.step_velocity} 步/分</span>`;
+    } else if (s.state === 'BUSY' && (s.busy_duration || 0) > 90) {
+      velocityHtml = `<span class="velocity-badge thinking" title="深度运算与规划中">⏳ 深度运算</span>`;
+    }
 
     let statusText = '就绪待命';
     let statusClass = 'idle';
@@ -488,6 +530,7 @@ function renderFleetMatrix(sessions) {
           </label>
           <span class="node-chip ${nodeClass}">${nodeLabel}</span>
           ${s.node_type.startsWith('ssh:') ? `<span class="node-ping-badge" onclick="pingSshNode('${escapeHtml(s.node_type)}', this)" title="点击测试远程 SSH 连通性与网络延迟">⚡ 测速</span>` : ''}
+          ${tagsHtml}
           <span class="conv-id-chip" title="点击复制完整会话ID" onclick="copyText('${s.id}')">${s.id.slice(0, 8)}...</span>
         </div>
         <div style="display: flex; gap: 8px; align-items: center;">
@@ -506,9 +549,12 @@ function renderFleetMatrix(sessions) {
 
       <div class="fleet-card-status-row">
         <span class="fleet-status-badge ${statusClass}">${statusText}</span>
-        <span style="font-size: 11px; color: #64748b; font-family: var(--font-mono);">
-          Step ${s.current_step >= 0 ? s.current_step : '--'}
-        </span>
+        <div style="display: flex; gap: 6px; align-items: center;">
+          ${velocityHtml}
+          <span style="font-size: 11px; color: #64748b; font-family: var(--font-mono);">
+            Step ${s.current_step >= 0 ? s.current_step : '--'}
+          </span>
+        </div>
       </div>
 
       ${cooldownBarHtml}

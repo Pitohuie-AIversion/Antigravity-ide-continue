@@ -289,15 +289,27 @@
             <span>💬 默认自动注入指令 (Prompt Content)</span>
             <span class="config-hint">该会话每轮结束时注入的文字</span>
           </label>
-          <input type="text" class="custom-input" id="promptInput" value="继续推进下一项任务" placeholder="例如：继续、继续推进下一步">
+          <div style="display: flex; gap: 8px;">
+            <input type="text" class="custom-input" id="promptInput" value="继续推进下一项任务" placeholder="例如：[/goal](slashCommand;goal) 继续全局开发">
+            <button type="button" class="btn-card-action" id="saveCustomPromptBtn" title="将当前输入的指令存入常用指令库" style="white-space: nowrap; padding: 0 14px; font-size: 12px;">⭐ 存为常用</button>
+          </div>
           
-          <!-- 快捷提示词药丸 -->
-          <div class="prompt-pills">
+          <!-- 快捷提示词宏与历史药丸容器 -->
+          <div class="prompt-pills" id="promptMacroBar">
             <button type="button" class="prompt-pill" data-val="[/goal](slashCommand;goal) 继续全局开发">🚀 /goal 全局开发</button>
             <button type="button" class="prompt-pill" data-val="[/plan](slashCommand;plan) 规划并推进下一阶段">📋 /plan 规划阶段</button>
             <button type="button" class="prompt-pill" data-val="继续推进下一项任务">⚡ 继续推进任务</button>
             <button type="button" class="prompt-pill" data-val="自测代码并验证效果">🧪 自测与验证</button>
             <button type="button" class="prompt-pill" data-val="生成完整交付总结报告">📊 交付总结报告</button>
+          </div>
+
+          <!-- 分类标签设置 -->
+          <div style="margin-top: 10px;">
+            <label class="config-label" style="margin-bottom: 6px;">
+              <span>🏷️ 标签分类 (可选，逗号分隔)</span>
+              <span class="config-hint">如：核心, 后端, 自动化, 实验</span>
+            </label>
+            <input type="text" class="custom-input" id="enrollTagsInput" placeholder="例如：核心, 后端, 仿真测试">
           </div>
 
           <!-- 冷却时间与轮数设置 -->
@@ -614,6 +626,65 @@
           <button class="btn-card-action" id="downloadReportBtn">⬇️ 导出 .md 文件</button>
           <button class="btn-card-action primary" id="copyReportBtn">📋 复制 Markdown 报告</button>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ⚙️ 会话专属参数配置与参数微调弹窗 (Session Edit Modal) -->
+  <div class="modal-overlay" id="sessionEditModal" style="display: none;">
+    <div class="modal-box" style="max-width: 560px;">
+      <div class="modal-header">
+        <div class="modal-title">
+          <span>⚙️</span> <span id="sessionEditModalTitle">配置会话参数</span>
+        </div>
+        <button class="modal-close-btn" id="closeSessionEditModalBtn">✕</button>
+      </div>
+      <div class="modal-body" style="padding: 20px;">
+        <input type="hidden" id="editSessionCid">
+        <div class="form-group">
+          <label class="form-label" style="font-size: 12px; font-weight: 600; color: var(--text-muted); margin-bottom: 6px; display: block;">会话标题 (Title)</label>
+          <input type="text" class="custom-input" id="editSessionTitle" placeholder="会话名称...">
+        </div>
+        <div class="form-group" style="margin-top: 14px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+            <label class="form-label" style="font-size: 12px; font-weight: 600; color: var(--text-muted); margin-bottom: 0;">自动注入指令 (Prompt Content)</label>
+            <button type="button" class="btn-card-action" id="saveEditPromptMacroBtn" style="padding: 2px 8px; font-size: 11px;">⭐ 存为常用</button>
+          </div>
+          <input type="text" class="custom-input" id="editSessionPrompt">
+          <!-- 快捷提示词宏与历史药丸容器 (Edit Modal) -->
+          <div class="prompt-pills" id="editPromptMacroBar" style="margin-top: 8px;"></div>
+        </div>
+        <div class="params-row" style="margin-top: 14px; display: grid; grid-template-columns: 1fr 1fr; gap: 14px;">
+          <div class="param-item">
+            <label class="sub-label">消抖冷却延迟 (秒)</label>
+            <div class="number-input-wrap">
+              <input type="number" class="param-input" id="editSessionCooldown" min="1.0" max="60.0" step="0.5">
+              <span class="param-unit">秒</span>
+            </div>
+          </div>
+          <div class="param-item">
+            <label class="sub-label">最大轮数上限</label>
+            <div class="number-input-wrap">
+              <input type="number" class="param-input" id="editSessionMaxTurns" min="1" max="99999">
+              <span class="param-unit">轮</span>
+            </div>
+          </div>
+        </div>
+        <div class="form-group" style="margin-top: 14px;">
+          <label class="form-label" style="font-size: 12px; font-weight: 600; color: var(--text-muted); margin-bottom: 6px; display: block;">分类标签 (Tags，逗号分隔)</label>
+          <input type="text" class="custom-input" id="editSessionTags" placeholder="例如: 核心, 后端, 算法">
+        </div>
+        <div class="checkbox-row" style="margin-top: 14px;">
+          <label class="custom-checkbox">
+            <input type="checkbox" id="editSessionPinned">
+            <span class="checkmark"></span>
+            <span>📌 将此会话置顶于矩阵看板首位</span>
+          </label>
+        </div>
+      </div>
+      <div class="modal-footer" style="display: flex; justify-content: flex-end; gap: 10px; padding: 12px 20px; border-top: 1px solid var(--border-subtle);">
+        <button class="btn-card-action" id="cancelSessionEditBtn">取消</button>
+        <button class="btn-card-action primary" id="saveSessionEditBtn">💾 保存更新</button>
       </div>
     </div>
   </div>

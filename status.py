@@ -117,8 +117,8 @@ def main():
 
         sessions = live_status.get("sessions", [])
         if sessions:
-            print(f"{'节点':<10} {'会话ID':<12} {'状态':<14} {'当前步数':<10} {'已注入':<8} {'提示词'}")
-            print("-" * 72)
+            print(f"{'节点':<8} {'会话ID':<14} {'状态':<14} {'步数与速率':<15} {'已注入':<8} {'提示词与标签'}")
+            print("-" * 76)
             for s in sessions:
                 node_short = "本地" if s.get("node_type") == "local" else "恒源云"
                 pin_mark = "📌 " if s.get("pinned") else ""
@@ -127,11 +127,15 @@ def main():
                 dur = s.get("busy_duration", 0)
                 dur_str = f"({dur}s)" if dur > 0 and state == "BUSY" else ""
                 state_str = f"{state} {dur_str}".strip()
-                step = f"Step {s.get('current_step', '--')}"
+                vel = s.get("step_velocity", 0.0)
+                vel_str = f" (+{vel}/m)" if vel > 0 else ""
+                step = f"Step {s.get('current_step', '--')}{vel_str}"
                 sent = f"{s.get('sent_count', 0)} 轮"
-                prompt = s.get("prompt", "继续")[:16]
+                tags = s.get("tags", [])
+                tag_str = f" [#{','.join(tags)}]" if tags else ""
+                prompt = (s.get("prompt", "继续")[:14] + tag_str)
                 enabled_mark = "🟢" if s.get("enabled") else "⏸️"
-                print(f"{node_short:<10} {cid_short:<12} {enabled_mark} {state_str:<12} {step:<10} {sent:<8} \"{prompt}\"")
+                print(f"{node_short:<8} {cid_short:<14} {enabled_mark} {state_str:<12} {step:<15} {sent:<8} \"{prompt}\"")
         else:
             print("  ⚪ 暂无纳管会话记录")
 

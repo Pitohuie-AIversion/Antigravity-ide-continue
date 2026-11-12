@@ -226,6 +226,7 @@ class MultiSessionDaemon:
         self.injection_timestamps = deque(maxlen=300)
         self.telemetry_history = deque(maxlen=60)
         self._last_telemetry_snapshot = 0.0
+        self.step_history: Dict[str, deque] = {}  # conv_id -> deque of (timestamp, step_idx)
         self.notification_callback: Optional[Any] = None
         self._last_config_mtime = 0.0
 
@@ -315,6 +316,7 @@ class MultiSessionDaemon:
                                 cur["cooldown"] = float(s.get("cooldown", cur["cooldown"]))
                                 cur["max_turns"] = int(s.get("max_turns", cur["max_turns"]))
                                 cur["pinned"] = bool(s.get("pinned", cur.get("pinned", False)))
+                                cur["tags"] = s.get("tags", cur.get("tags", []))
                                 new_enabled = bool(s.get("enabled", True))
                                 if cur["enabled"] != new_enabled:
                                     cur["enabled"] = new_enabled
@@ -329,10 +331,12 @@ class MultiSessionDaemon:
                                     "max_turns": int(s.get("max_turns", 9999)),
                                     "enabled": bool(s.get("enabled", True)),
                                     "pinned": bool(s.get("pinned", False)),
+                                    "tags": s.get("tags", []),
                                     "state": "IDLE" if s.get("enabled", True) else "STOPPED",
                                     "current_step": 0,
                                     "last_handled_step": -1,
                                     "sent_count": 0,
+                                    "step_velocity": 0.0,
                                     "cooldown_remaining": 0.0,
                                     "idle_start_time": None,
                                     "last_snippet": "",
@@ -356,7 +360,8 @@ class MultiSessionDaemon:
                     prompt="继续",
                     cooldown=3.0,
                     max_turns=9999,
-                    enabled=True
+                    enabled=True,
+                    tags=[]
                 )
 
     def save_config(self):
@@ -372,7 +377,8 @@ class MultiSessionDaemon:
                         "cooldown": s["cooldown"],
                         "max_turns": s["max_turns"],
                         "enabled": s["enabled"],
-                        "pinned": bool(s.get("pinned", False))
+                        "pinned": bool(s.get("pinned", False)),
+                        "tags": s.get("tags", [])
                     })
                 data = {
                     "node_type": self.node_type,
@@ -523,7 +529,7 @@ class MultiSessionDaemon:
 
     def add_session(self, conv_id: str, node_type: str = "local", title: str = "",
                     prompt: str = "继续", cooldown: float = 3.0, max_turns: int = 9999,
-                    enabled: bool = True) -> bool:
+                    enabled: bool = True, tags: Optional[List[str]] = None) -> bool:
         conv_id = conv_id.strip()
         if not conv_id:
             return False
@@ -552,11 +558,13 @@ class MultiSessionDaemon:
                 "current_step": 0,
                 "last_handled_step": -1,
                 "sent_count": 0,
+                "step_velocity": 0.0,
                 "cooldown_remaining": 0.0,
                 "idle_start_time": None,
                 "last_snippet": "",
                 "error": "",
                 "pinned": False,
+                "tags": tags or [],
                 "updated_at": time.time()
             }
 
@@ -569,6 +577,7 @@ class MultiSessionDaemon:
         conv_id = conv_id.strip()
         with self.lock:
             s = self.sessions.pop(conv_id, None)
+            self.step_history.pop(conv_id, None)
         if s:
             self.save_config()
             self.add_log(f"已移出会话 [{s.get('title', conv_id[:8])}]", "INFO")
@@ -604,6 +613,14 @@ class MultiSessionDaemon:
             if "max_turns" in data: s["max_turns"] = int(data["max_turns"])
             if "title" in data: s["title"] = str(data["title"]).strip()
             if "pinned" in data: s["pinned"] = bool(data["pinned"])
+            if "tags" in data:
+                raw_tags = data["tags"]
+                if isinstance(raw_tags, str):
+                    s["tags"] = [t.strip() for t in raw_tags.replace("，", ",").split(",") if t.strip()]
+                elif isinstance(raw_tags, list):
+                    s["tags"] = [str(t).strip() for t in raw_tags if str(t).strip()]
+                else:
+                    s["tags"] = []
         self.save_config()
         self.add_log(f"会话 [{conv_id[:8]}] 参数已更新", "SUCCESS")
         return True
@@ -889,12 +906,16 @@ class MultiSessionDaemon:
             node = "☁️ 远程" if s.get("node_type", "").startswith("ssh:") else "🖥️ 本地"
             title = s.get("title", s["id"][:8]).replace("|", "-")
             cid = s["id"]
+            tags = s.get("tags", [])
+            tag_str = f" `#{','.join(tags)}`" if tags else ""
             state = s.get("state", "UNKNOWN")
             st_icon = "🟢" if state in ("BUSY", "IDLE") else ("🎉" if state == "COMPLETED" else "⏸️")
             step = s.get("current_step", 0)
+            vel = s.get("step_velocity", 0.0)
+            vel_str = f" (+{vel}/分)" if vel > 0 else ""
             sent = s.get("sent_count", 0)
             snippet = (s.get("last_snippet") or s.get("prompt") or "").replace("|", "-").replace("\n", " ")[:60]
-            md.append(f"| {node} | **{title}** | `{cid[:8]}..` | {st_icon} {state} | Step {step} | {sent} 轮 | {snippet} |")
+            md.append(f"| {node} | **{title}**{tag_str} | `{cid[:8]}..` | {st_icon} {state} | Step {step}{vel_str} | {sent} 轮 | {snippet} |")
 
         md.append("\n---\n*Report generated automatically by Antigravity Auto-Pilot Engine.*")
         return "\n".join(md)
@@ -1085,6 +1106,31 @@ class MultiSessionDaemon:
                         curr["current_step"] = step_idx
                         curr["last_snippet"] = snippet
                         curr["updated_at"] = now
+
+                        # Dynamically compute step velocity (steps/minute)
+                        if step_idx >= 0:
+                            hist = self.step_history.setdefault(cid, deque(maxlen=40))
+                            if not hist or (now - hist[-1][0] >= 3.0) or (step_idx != hist[-1][1]):
+                                hist.append((now, step_idx))
+                            while hist and (now - hist[0][0] > 180.0):
+                                hist.popleft()
+                            if len(hist) >= 2:
+                                oldest_valid = None
+                                for rec in hist:
+                                    if now - rec[0] >= 12.0:
+                                        oldest_valid = rec
+                                        break
+                                if oldest_valid:
+                                    dt_min = (now - oldest_valid[0]) / 60.0
+                                    d_step = step_idx - oldest_valid[1]
+                                    if dt_min > 0 and d_step >= 0:
+                                        curr["step_velocity"] = round(d_step / dt_min, 1)
+                                    else:
+                                        curr["step_velocity"] = 0.0
+                                elif not curr.get("step_velocity"):
+                                    curr["step_velocity"] = 0.0
+                        else:
+                            curr["step_velocity"] = 0.0
 
                         # 1. 任务完成判定
                         if is_completed:
@@ -1366,7 +1412,14 @@ class AutoPilotHTTPHandler(SimpleHTTPRequestHandler):
             cooldown = float(body.get("cooldown", 3.0))
             max_turns = int(body.get("max_turns", 9999))
             enabled = bool(body.get("enabled", True))
-            ok = daemon.add_session(cid, node, title, prompt, cooldown, max_turns, enabled)
+            raw_tags = body.get("tags", [])
+            if isinstance(raw_tags, str):
+                tags = [t.strip() for t in raw_tags.replace("，", ",").split(",") if t.strip()]
+            elif isinstance(raw_tags, list):
+                tags = [str(t).strip() for t in raw_tags if str(t).strip()]
+            else:
+                tags = []
+            ok = daemon.add_session(cid, node, title, prompt, cooldown, max_turns, enabled, tags=tags)
             self.send_json({"ok": ok, "status": daemon.get_status_payload()})
 
         elif path == "/api/sessions/remove":
