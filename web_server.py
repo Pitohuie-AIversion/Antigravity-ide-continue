@@ -1362,7 +1362,8 @@ class AutoPilotHTTPHandler(SimpleHTTPRequestHandler):
             rel_file = path[len("/preview/"):]
             seagent_dir = os.path.join(os.path.dirname(APP_DIR), "seagent2.1")
             target_file = os.path.normpath(os.path.join(seagent_dir, rel_file))
-            if target_file.startswith(seagent_dir) and os.path.exists(target_file) and os.path.isfile(target_file):
+            # 🛡️ Sentinel: Fix path traversal by using commonpath instead of startswith
+            if os.path.commonpath([target_file, seagent_dir]) == seagent_dir and os.path.exists(target_file) and os.path.isfile(target_file):
                 mime = "text/plain"
                 if target_file.endswith(".html"): mime = "text/html; charset=utf-8"
                 elif target_file.endswith(".js"): mime = "application/javascript; charset=utf-8"

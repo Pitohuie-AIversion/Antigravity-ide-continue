@@ -1,0 +1,4 @@
+## 2026-11-11 - [Path Traversal in preview endpoint]
+**Vulnerability:** The `/preview/` endpoint in `web_server.py` had a path traversal vulnerability. It used `target_file.startswith(seagent_dir)` to verify the path boundary. However, `startswith()` performs a simple string check. An attacker requesting `/preview/../seagent2.1-secrets/key.txt` leads to a target file `/home/user/seagent2.1-secrets/key.txt`, which strictly string-matches `startswith('/home/user/seagent2.1')` but points to an entirely different directory.
+**Learning:** `startswith()` on paths is dangerous for directory boundary checks because it can match unintended directories sharing the same prefix (e.g. `dir-secret` starting with `dir`).
+**Prevention:** Always use `os.path.commonpath([target_file, safe_dir]) == safe_dir` or append `os.sep` to `safe_dir` prior to checking `startswith`.
