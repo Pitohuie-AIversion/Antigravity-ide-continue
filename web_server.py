@@ -1362,7 +1362,12 @@ class AutoPilotHTTPHandler(SimpleHTTPRequestHandler):
             rel_file = path[len("/preview/"):]
             seagent_dir = os.path.join(os.path.dirname(APP_DIR), "seagent2.1")
             target_file = os.path.normpath(os.path.join(seagent_dir, rel_file))
-            if target_file.startswith(seagent_dir) and os.path.exists(target_file) and os.path.isfile(target_file):
+
+            # 🛡️ Sentinel: Fix path traversal vulnerability
+            # Prevent accessing files like seagent2.1-hacked by ensuring target_file is truly inside seagent_dir
+            seagent_dir_abs = os.path.abspath(seagent_dir)
+            target_file_abs = os.path.abspath(target_file)
+            if os.path.commonpath([seagent_dir_abs, target_file_abs]) == seagent_dir_abs and os.path.exists(target_file) and os.path.isfile(target_file):
                 mime = "text/plain"
                 if target_file.endswith(".html"): mime = "text/html; charset=utf-8"
                 elif target_file.endswith(".js"): mime = "application/javascript; charset=utf-8"
